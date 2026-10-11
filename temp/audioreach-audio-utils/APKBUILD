@@ -1,0 +1,49 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=audioreach-audio-utils
+pkgver=1.1.0_git20260929
+pkgrel=0
+_commit="4e255ecf0ecf14bc8305044614a15f58a71884c9"
+pkgdesc="AudioReach utilities (audioroute, sound card parser)"
+url="https://github.com/AudioReach/audioreach-audio-utils"
+arch="aarch64"
+license="BSD-3-Clause-Clear"
+depends=""
+makedepends="autoconf automake libtool linux-headers glib-dev tinyalsa-dev>=2.0.0_git expat-dev"
+subpackages="$pkgname-dev"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-audio-utils/archive/$_commit.tar.gz
+	musl-compat.h
+"
+builddir="$srcdir/audioreach-audio-utils-$_commit"
+options="!check"
+
+prepare() {
+	default_prepare
+	# -D__unused=... breaks musl headers (struct stat member); musl-compat.h
+	# defines it after <sys/stat.h> instead
+	find . \( -name Makefile.am -o -name configure.ac \) -exec \
+		sed -i 's/-D__unused=__attribute__\\(\\(__unused__\\)\\)//' {} +
+	autoreconf -fi
+}
+
+build() {
+	export CFLAGS="$CFLAGS -include $srcdir/musl-compat.h"
+	export CXXFLAGS="$CXXFLAGS -include $srcdir/musl-compat.h"
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--with-glib --with-syslog
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+sha512sums="
+cea9a1163b6f24440ba32840e95aa20745d58179dafb8880f9a5d151166f9a5ae5513a648d23d58a8f9f172c92b1029ad9835c6f72a71db7bafb669b820c837c  audioreach-audio-utils-4e255ecf0ecf14bc8305044614a15f58a71884c9.tar.gz
+a85c655c09e0e6b4ae17763a74762d27dfd88194b767d1d73743618050afa827ea487a52a65a00138b2ce76c80057de5b25b5930afe13d6b78761c258d374c8e  musl-compat.h
+"

@@ -1,0 +1,65 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=audioreach-graphmgr
+pkgver=1.1.0_git20260929
+pkgrel=3
+_commit="e9165150db2442f03e202496e8484ec662862ff8"
+pkgdesc="AudioReach Audio Graph Manager (AGM) and tinyalsa/tinycompress plugins"
+url="https://github.com/AudioReach/audioreach-graphmgr"
+arch="aarch64"
+license="BSD-3-Clause-Clear"
+depends=""
+makedepends="autoconf automake libtool linux-headers glib-dev expat-dev tinyalsa-dev>=2.0.0_git tinycompress-dev>=1.2.16 audioreach-graphservices-dev audioreach-conf"
+subpackages="$pkgname-dev"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-graphmgr/archive/$_commit.tar.gz
+	musl-compat.h
+"
+builddir="$srcdir/audioreach-graphmgr-$_commit"
+options="!check"
+
+prepare() {
+	default_prepare
+	# -D__unused=... breaks musl headers (struct stat member); musl-compat.h
+	# defines it after <sys/stat.h> instead
+	find . \( -name Makefile.am -o -name configure.ac \) -exec \
+		sed -i 's/-D__unused=__attribute__\\(\\(__unused__\\)\\)//' {} +
+	autoreconf -fi
+}
+
+build() {
+	# Only the __unused part of musl-compat.h: the agm test tools declare a
+	# global named "close", which clashes with an implicit <unistd.h>
+	printf '#include <sys/stat.h>\n#include <sys/types.h>\n#ifndef __unused\n#define __unused __attribute__((__unused__))\n#endif\n' \
+		> "$srcdir"/musl-unused.h
+	export CFLAGS="$CFLAGS -include $srcdir/musl-unused.h"
+	export CXXFLAGS="$CXXFLAGS -include $srcdir/musl-unused.h"
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--with-glib --with-syslog --with-no-ipc
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+dev() {
+	default_dev
+	# dlopen()ed by unversioned name (tinyalsa, card-defs.xml), keep them in the main package
+	local l
+	for l in libsndcardparser libagm_pcm_plugin libagm_mixer_plugin libagm_compress_plugin; do
+		# symlinks to the .so.1 in the main package: -e would follow them and fail
+		if [ -L "$subpkgdir"/usr/lib/$l.so ]; then
+			mv "$subpkgdir"/usr/lib/$l.so "$pkgdir"/usr/lib/
+		fi
+	done
+}
+
+sha512sums="
+be400b4afaa54224cd4bb2e45d1e6380cddf5e31c733a927907b2a2ea71b282780ea4721de7fd3426ae6fe1e167ba103f51bc2ade21a863f6401a0b1ce89e497  audioreach-graphmgr-e9165150db2442f03e202496e8484ec662862ff8.tar.gz
+a85c655c09e0e6b4ae17763a74762d27dfd88194b767d1d73743618050afa827ea487a52a65a00138b2ce76c80057de5b25b5930afe13d6b78761c258d374c8e  musl-compat.h
+"

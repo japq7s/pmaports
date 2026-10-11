@@ -1,0 +1,17 @@
+Mainline kernels have no "linux,cma-uncached" heap. Fall back to the
+cached CMA heap and then to the system heap: the buffer is mapped for the
+DSP through the msm_audio_mem SMMU context, so it need not be contiguous.
+
+--- a/ar_osal/src/linux/ar_osal_shmem_phy.c
++++ b/ar_osal/src/linux/ar_osal_shmem_phy.c
+@@ -238,6 +238,10 @@
+ 
+     AR_LOG_INFO(AR_OSAL_SHMEM_LOG_TAG, "%s: Using dmaheap path: linux,system-uncached %s\n", __func__, DMABUF_SYS_HEAP_PATH_UNCACHED);
+     pdata->dmabuf_fd = open(DMABUF_SYS_HEAP_PATH_UNCACHED, O_RDONLY | O_CLOEXEC);
++    if (pdata->dmabuf_fd < 0)
++        pdata->dmabuf_fd = open(DMABUF_SYS_HEAP_PATH, O_RDONLY | O_CLOEXEC);
++    if (pdata->dmabuf_fd < 0)
++        pdata->dmabuf_fd = open("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
+ 
+     /*Check if dma_buf heap initialize the dmabuf_handle to invalid handle */
+     if (pdata->dmabuf_fd < 0) {
