@@ -1,0 +1,108 @@
+From ba678b25b104ea6b98081df0f4ddf87ce73d3490 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Sun, 11 Oct 2026 16:23:15 +0200
+Subject: [PATCH 1/2] module-pal-card: only tear down what was initialised
+
+pa__done() is also the error path of pa__init(). When agm_init() or
+pal_init() fails (for example in a display-manager session that has no
+access to the audio device nodes, or when the AGM tinyalsa plugins
+cannot be loaded), it unconditionally deinitialised AGM, PAL, the sink
+module data, jack detection and the D-Bus extension, and hit one of
+
+  Assertion 'pal_extn_mdata' failed at module-pal-card-extn.c:316
+  Assertion 'mdata' failed at pal-sink.c:1758
+  Assertion 'u->jacks' failed in pa_pal_card_disable_jack_detection()
+
+aborting the whole daemon. Track which parts were set up and only undo
+those.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../module-pal-card/src/module-pal-card.c     | 27 +++++++++++++++----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/module-pal-card/src/module-pal-card.c b/module-pal-card/src/module-pal-card.c
+index 873f1a7..3c9ff82 100644
+--- a/module-pal-card/src/module-pal-card.c
++++ b/module-pal-card/src/module-pal-card.c
+@@ -89,6 +89,11 @@ struct userdata {
+     pa_pal_config_data *config_data;
+     char *conf_dir_name;
+     char *conf_file_name;
++
++    bool agm_inited;
++    bool pal_inited;
++    bool extn_inited;
++    bool sink_module_inited;
+ };
+ 
+ 
+@@ -1113,12 +1118,14 @@ int pa__init(pa_module *m) {
+         pa_log_error("%s: agm init failed\n", __func__);
+         goto fail;
+     }
++    u->agm_inited = true;
+ 
+     ret = pal_init();
+     if (ret) {
+         pa_log_error("%s: pal init failed\n", __func__);
+         goto fail;
+     }
++    u->pal_inited = true;
+ 
+     pa_pal_card_create(u);
+ 
+@@ -1128,6 +1135,7 @@ int pa__init(pa_module *m) {
+     }
+ 
+     pa_pal_sink_module_init();
++    u->sink_module_inited = true;
+     if (pa_hashmap_size(u->config_data->sinks)) {
+         u->sinks = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
+ 
+@@ -1149,6 +1157,8 @@ int pa__init(pa_module *m) {
+     ret = pa_pal_module_extn_init(u->core, u->card);
+     if(ret)
+         pa_log_error("pal extn init failed\n");
++    else
++        u->extn_inited = true;
+     pa_log_debug("Pal extn module loaded successfully\n", __func__);
+ 
+     if (pa_hashmap_size(u->config_data->loopbacks)) {
+@@ -1181,7 +1191,10 @@ void pa__done(pa_module *m) {
+     if (!(u = m->userdata))
+         return;
+ 
+-    pa_pal_module_extn_deinit();
++    /* a failed init (e.g. a greeter session without access to the audio
++     * nodes) gets here too: only tear down what was set up */
++    if (u->extn_inited)
++        pa_pal_module_extn_deinit();
+     pa_pal_loopback_deinit();
+ 
+     if (u->sources) {
+@@ -1198,13 +1211,17 @@ void pa__done(pa_module *m) {
+         pa_hashmap_free(u->sinks);
+     }
+ 
+-    pa_pal_sink_module_deinit();
++    if (u->sink_module_inited)
++        pa_pal_sink_module_deinit();
+ 
+-    pa_pal_card_disable_jack_detection(u, m);
++    if (u->jacks)
++        pa_pal_card_disable_jack_detection(u, m);
+ 
+-    pal_deinit();
++    if (u->pal_inited)
++        pal_deinit();
+ 
+-    agm_deinit();
++    if (u->agm_inited)
++        agm_deinit();
+ 
+     pa_pal_card_free(u);
+ 
+-- 
+2.55.0
+
