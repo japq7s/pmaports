@@ -1,0 +1,95 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+# Kernel: Linux 7.3-rc5 + SM8475 support from sm8450-mainline/linux "next"
+# + realme GT Neo5 150W (senna-b) patches, branch "senna-7.3" of
+# https://github.com/japq7s/linux-sm8450-mainline
+# Devices: Nothing Phone 2 (pong), Realme GT Neo5 150W (senna-b), Xiaomi 12 (cupid)
+
+_flavor="postmarketos-qcom-sm8450"
+pkgname=linux-$_flavor
+pkgver=7.3.0_rc5
+pkgrel=7
+pkgdesc="Mainline kernel fork for SM8450/SM8475 devices"
+arch="aarch64"
+_carch="arm64"
+url="https://github.com/japq7s/linux-sm8450-mainline"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-nftables
+	"
+makedepends="bison findutils flex installkernel openssl-dev perl python3"
+
+_commit="0c48bd1d1644bbc8d67b4f04f14521344ace4616"
+_config="config-$_flavor.$arch"
+# AudioReach kernel drivers (GPR passthrough, audio memory, q6apm/q6prm for
+# the AudioReach userspace). They replace the upstream q6apm/q6prm ASoC
+# drivers, which device-realme-senna-b blacklists.
+_ar_commit="07e619c32b8a63a9a0ea7cf23438b3d5f62f0baf"
+# OPLUS charger (oplus_chg v1) for the realme GT Neo5 150W (senna-b): the OPLUS
+# ADSP charger firmware does not charge until this driver enables it.
+# device-realme-senna-b blacklists qcom_battmgr, which binds the same service.
+_oc_commit="4e4d46be87979d38fe36e8007676ecef871e7ddc"
+
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/japq7s/linux-sm8450-mainline/archive/$_commit.tar.gz
+	config-$_flavor.$arch
+	audioreach-kernel-$_ar_commit.tar.gz::https://github.com/Audioreach/audioreach-kernel/archive/$_ar_commit.tar.gz
+	0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
+	oplus-chg-$_oc_commit.tar.gz::https://github.com/japq7s/oplus-chg-mainline/archive/$_oc_commit.tar.gz
+"
+builddir="$srcdir/linux-sm8450-mainline-$_commit"
+_ardir="$srcdir/audioreach-kernel-$_ar_commit"
+_ocdir="$srcdir/oplus-chg-mainline-$_oc_commit"
+
+prepare() {
+	# the only patch is for audioreach-kernel, not for the kernel tree
+	cd "$_ardir"
+	patch -p1 -i "$srcdir"/0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
+
+	cd "$builddir"
+	cp "$srcdir/config-$_flavor.$arch" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" CC="${CC:-gcc}" \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-$_flavor"
+
+	make ARCH="$_carch" CC="${CC:-gcc}" \
+		M="$_ardir/audioreach-driver" KERNEL_SRC="$builddir" VENDOR_QCOM=1 \
+		modules
+
+	KSRC="$builddir" "$_ocdir"/build-mainline.sh CC="${CC:-gcc}" modules
+}
+
+package() {
+	mkdir -p "$pkgdir"/boot
+	make zinstall modules_install dtbs_install \
+		ARCH="$_carch" \
+		INSTALL_PATH="$pkgdir"/boot/ \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir"/boot/dtbs
+
+	make ARCH="$_carch" \
+		M="$_ardir/audioreach-driver" KERNEL_SRC="$builddir" VENDOR_QCOM=1 \
+		INSTALL_MOD_PATH="$pkgdir" INSTALL_MOD_STRIP=1 INSTALL_MOD_DIR=extra \
+		modules_install
+
+	KSRC="$builddir" "$_ocdir"/build-mainline.sh \
+		INSTALL_MOD_PATH="$pkgdir" INSTALL_MOD_STRIP=1 INSTALL_MOD_DIR=extra \
+		modules_install
+
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	install -D "$builddir"/include/config/kernel.release \
+		"$pkgdir"/usr/share/kernel/$_flavor/kernel.release
+}
+
+sha512sums="
+f498112ad5347f6b6694291dc657481c22fa7ea35ddacfaa0445bf0cb8be9a5d2d0d14e924d68025d2ee9f93dd18d06a63dd200063e32a302844e3d8138bdd93  linux-postmarketos-qcom-sm8450-0c48bd1d1644bbc8d67b4f04f14521344ace4616.tar.gz
+ceedd7b3d51a0b7d660ba3a2fe3e3fe1ca42a274a0eb60394f4f9067a4b41593a0e1fa69ed6668a71cbfad9467019728f1666c653112ee116cad8f6a6abe2ce0  config-postmarketos-qcom-sm8450.aarch64
+b777a0249a4b030abd6c9a11807a24cf6bd20d1bc22ba006cbdc8e87fedbaec241d9028af4606833587784a132ca3d49d057be678519b1f2a6da3900e2850631  audioreach-kernel-07e619c32b8a63a9a0ea7cf23438b3d5f62f0baf.tar.gz
+144a7b6891d25a64c0a1b804a0f987ce52b9691220e5af2c03869231b28cb928ba8a061db726cb80b7382ac86b4a6d445f49dc773edb762fa77594610df7db19  0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
+df5f5a2447e28baf0fd8be9543de9934a2a765b6a0e1e9b67065dfc9d24112ca109aeb27c21de6f69da32687431c3a9d205a906e0d0096015cabf3412bcae2e8  oplus-chg-4e4d46be87979d38fe36e8007676ecef871e7ddc.tar.gz
+"

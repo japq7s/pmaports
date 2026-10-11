@@ -1,0 +1,50 @@
+From 500ef7bd732bcf751eda898c50888822dcd475b5 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Sun, 11 Oct 2026 16:32:27 +0200
+Subject: [PATCH] audioreach_common: sm8450: drop the WSA speaker and jack
+ defaults
+
+The sm8450 card data reused the qcs6490 DAPM routes, two WSA speakers
+and the WCD headset jack. On the realme GT Neo5 (SM8475) there are no
+WSA amplifiers (the loudspeakers are TFA9874 on tertiary MI2S) and no
+3.5 mm jack, and the WSA widgets referenced by the routes make card
+registration fail with -ENODEV.
+
+Keep only the DAPM widgets, take the board routes from DT audio-routing
+and enable the MI2S MCLK/BCLK the TFA9874 link needs.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ audioreach-driver/audioreach_common.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/audioreach-driver/audioreach_common.c b/audioreach-driver/audioreach_common.c
+index 1a3ff7e..926be88 100644
+--- a/audioreach-driver/audioreach_common.c
++++ b/audioreach-driver/audioreach_common.c
+@@ -1161,14 +1161,18 @@ static struct snd_soc_common sc8280xp_priv_data = {
+ 	.wcd_jack = true,
+ };
+ 
++/*
++ * realme GT Neo5 (SM8475): the loudspeakers are TFA9874 on tertiary MI2S
++ * and there is no WSA amplifier or headset jack. The qcs6490 routes
++ * reference WSA widgets, which makes card registration fail with
++ * -ENODEV; the board's microphone routes come from DT audio-routing.
++ */
+ static struct snd_soc_common sm8450_priv_data = {
+ 	.driver_name = "sm8450",
+ 	.dapm_widgets = qcs6490_dapm_widgets,
+ 	.num_dapm_widgets = ARRAY_SIZE(qcs6490_dapm_widgets),
+-	.dapm_routes = qcs6490_dapm_routes,
+-	.num_dapm_routes = ARRAY_SIZE(qcs6490_dapm_routes),
+-	.num_wsa_spkr = 2,
+-	.wcd_jack = true,
++	.mi2s_mclk_enable = true,
++	.mi2s_bclk_enable = true,
+ };
+ 
+ static struct snd_soc_common sm8550_priv_data = {
+-- 
+2.55.0
+
