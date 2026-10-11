@@ -1,0 +1,51 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=fastrpc
+pkgver=0.0.1_git20260911
+pkgrel=1
+_commit="d247519650fe5cb16de6c78edaa95bcc4be25073"
+pkgdesc="Qualcomm FastRPC userspace (libadsprpc, adsprpcd) for DSP remote calls"
+url="https://github.com/quic/fastrpc"
+arch="aarch64"
+license="BSD-3-Clause"
+makedepends="autoconf automake libtool linux-headers yaml-dev libbsd-dev"
+subpackages="$pkgname-dev $pkgname-doc $pkgname-systemd $pkgname-udev"
+source="$pkgname-$_commit.tar.gz::https://github.com/quic/fastrpc/archive/$_commit.tar.gz"
+builddir="$srcdir/fastrpc-$_commit"
+options="!check !strip"
+
+prepare() {
+	default_prepare
+	autoreconf -fi
+}
+
+build() {
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--with-systemdsystemunitdir=/usr/lib/systemd/system \
+		--with-udevrulesdir=/usr/lib/udev/rules.d \
+		--with-sysusersdir=/usr/lib/sysusers.d
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+sha512sums="
+dd0621a9f70cc25e8c5168cdc05b2404c0312c2c6be4292827b02f9c7f944cb32d1247892068eda3805f4afbf177612a9bba25d46f1fe7cf84b0694df416f2a0  fastrpc-d247519650fe5cb16de6c78edaa95bcc4be25073.tar.gz
+"
+
+systemd() {
+	pkgdesc="$pkgdesc (systemd units)"
+	install_if="$pkgname=$pkgver-r$pkgrel systemd"
+	amove usr/lib/systemd usr/lib/sysusers.d
+}
+
+udev() {
+	pkgdesc="$pkgdesc (udev rules)"
+	install_if="$pkgname=$pkgver-r$pkgrel udev"
+	amove usr/lib/udev
+}
