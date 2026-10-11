@@ -1,0 +1,4 @@
+# Modules loaded in the initramfs for early boot (FDE unlock, USB debug).
+# Panel and its dependencies are built-in (=y), no modules needed for display.
+# GPU firmware is loaded from /lib/firmware by the kernel; the zap shader
+# segments (a730_zap.mdt/.b00-.b02) are device-specific (TZ-signed).

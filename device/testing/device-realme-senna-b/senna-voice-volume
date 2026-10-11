@@ -1,0 +1,16 @@
+#!/bin/sh
+# senna-voice-volume 0..1: set the in-call volume of the PAL voice session.
+# Restarts the user's PulseAudio (do not use during a call) and callaudiod,
+# which does not reconnect to a restarted PulseAudio by itself.
+v=${1:?usage: senna-voice-volume 0..1}
+case "$v" in
+	0|1|0.[0-9]*|1.0) ;;
+	*) echo "usage: senna-voice-volume 0..1" >&2; exit 1 ;;
+esac
+f=/etc/pulse/default.pa.d/senna-pal.pa
+sudo sed -i "s/voice_volume=[0-9.]*/voice_volume=$v/" "$f"
+pulseaudio -k 2>/dev/null
+sleep 1
+pulseaudio --start
+pkill -x callaudiod	# D-Bus activated again on next use
+grep -o 'voice_volume=[0-9.]*' "$f"

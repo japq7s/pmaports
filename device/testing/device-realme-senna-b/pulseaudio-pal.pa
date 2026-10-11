@@ -1,0 +1,6 @@
+# PulseAudio on AudioReach PAL (audioreach-pulseaudio-plugin).
+# voice_volume: in-call (voice RX) volume, 0..1.
+# .nofail: sessions without access to the audio nodes (greeter) still start.
+.nofail
+load-module module-pal-card conf_dir_name=/etc/pulse/pal voice_volume=0.3
+.fail
