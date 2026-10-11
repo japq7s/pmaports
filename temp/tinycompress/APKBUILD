@@ -1,0 +1,42 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=tinycompress
+pkgver=1.2.16_git20260803
+pkgrel=0
+_commit="6d39f020bdc4af9dc586b48cecfed3c2a4e235ea"
+pkgdesc="Library for ALSA compressed audio offload (with plugin support)"
+url="https://github.com/alsa-project/tinycompress"
+arch="aarch64"
+license="BSD-3-Clause OR LGPL-2.1-only"
+depends=""
+makedepends="autoconf automake libtool linux-headers alsa-lib-dev"
+subpackages="$pkgname-dev"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/alsa-project/tinycompress/archive/$_commit.tar.gz
+"
+builddir="$srcdir/tinycompress-$_commit"
+options="!check"
+
+prepare() {
+	default_prepare
+	autoreconf -fi
+}
+
+build() {
+	# musl has no 'uint' (glibc's <sys/types.h> provides it); a -D macro
+	# breaks other declarations, so inject a typedef instead
+	printf '#include <sys/types.h>\ntypedef unsigned int uint;\n' > "$srcdir"/musl-uint.h
+	export CFLAGS="$CFLAGS -include $srcdir/musl-uint.h"
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+sha512sums="
+eb63119c4003adfb9298877a0e1189570e129b537fb7663e5773d3623adf31623fc6b4fc6e6fbc6a9022f1396c6add326d160b7275278e66ae094034bd0e2661  tinycompress-6d39f020bdc4af9dc586b48cecfed3c2a4e235ea.tar.gz
+"
