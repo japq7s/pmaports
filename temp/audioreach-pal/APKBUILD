@@ -1,0 +1,49 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=audioreach-pal
+pkgver=1.0.2_git20260930
+pkgrel=0
+_commit="37b51d124a64b588b2c2d0da653a0a0f627f71cb"
+pkgdesc="AudioReach Platform Abstraction Layer (PAL), incl. voice call sessions"
+url="https://github.com/AudioReach/audioreach-pal"
+arch="aarch64"
+license="BSD-3-Clause-Clear"
+depends=""
+makedepends="autoconf automake libtool linux-headers glib-dev expat-dev tinyalsa-dev>=2.0.0_git tinycompress-dev>=1.2.16 audioreach-graphmgr-dev audioreach-graphservices-dev audioreach-conf audioreach-audio-utils-dev"
+subpackages="$pkgname-dev"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-pal/archive/$_commit.tar.gz
+	musl-compat.h
+"
+builddir="$srcdir/audioreach-pal-$_commit"
+options="!check"
+
+prepare() {
+	default_prepare
+	# -D__unused=... breaks musl headers (struct stat member); musl-compat.h
+	# defines it after <sys/stat.h> instead
+	find . \( -name Makefile.am -o -name configure.ac \) -exec \
+		sed -i 's/-D__unused=__attribute__\\(\\(__unused__\\)\\)//' {} +
+	autoreconf -fi
+}
+
+build() {
+	export CFLAGS="$CFLAGS -include $srcdir/musl-compat.h"
+	export CXXFLAGS="$CXXFLAGS -include $srcdir/musl-compat.h"
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--with-glib --with-syslog
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+sha512sums="
+733ed6a9eb69677c73108ebe5b7684df329e5a571021c117eca270d3cdbe50fc73f78d05e75ed5bb9cc9a4a2fba187b54fb3b99659dd1efc880ecbae25e1c0e4  audioreach-pal-37b51d124a64b588b2c2d0da653a0a0f627f71cb.tar.gz
+a85c655c09e0e6b4ae17763a74762d27dfd88194b767d1d73743618050afa827ea487a52a65a00138b2ce76c80057de5b25b5930afe13d6b78761c258d374c8e  musl-compat.h
+"

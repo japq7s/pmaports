@@ -1,0 +1,57 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=audioreach-graphservices
+pkgver=1.0.1_git20261005
+pkgrel=1
+_commit="3094583c726710b66eb0204fc5d6a7b336d9e575"
+pkgdesc="AudioReach graph services: GSL, ACDB manager, GPR, ATS"
+url="https://github.com/AudioReach/audioreach-graphservices"
+arch="aarch64"
+license="BSD-3-Clause"
+depends=""
+makedepends="autoconf automake libtool linux-headers glib-dev"
+subpackages="$pkgname-dev"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-graphservices/archive/$_commit.tar.gz
+	musl-compat.h
+	0001-shmem-phy-fall-back-to-mainline-dma-heaps.patch
+	msm_audio.h
+"
+builddir="$srcdir/audioreach-graphservices-$_commit"
+options="!check"
+
+prepare() {
+	default_prepare
+	# -D__unused=... breaks musl headers (struct stat member); musl-compat.h
+	# defines it after <sys/stat.h> instead
+	find . \( -name Makefile.am -o -name configure.ac \) -exec \
+		sed -i 's/-D__unused=__attribute__\\(\\(__unused__\\)\\)//' {} +
+	autoreconf -fi
+}
+
+build() {
+	# uapi of the out-of-tree audioreach-kernel msm_audio_mem driver
+	mkdir -p "$srcdir"/inc/linux
+	cp "$srcdir"/msm_audio.h "$srcdir"/inc/linux/
+	export CPPFLAGS="$CPPFLAGS -I$srcdir/inc"
+	export CFLAGS="$CFLAGS -include $srcdir/musl-compat.h"
+	export CXXFLAGS="$CXXFLAGS -include $srcdir/musl-compat.h"
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--with-syslog --with-glib --without-cutils --with-audio_dma_support
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+sha512sums="
+9ba44afd4ff1cde50356f7a353f953d41cb6032ef24a9dc97b248adbe76171f37bd03fb30e39f01fc0a63846a405cdfc69184d285911d7e3f8889ea8f99e30a9  audioreach-graphservices-3094583c726710b66eb0204fc5d6a7b336d9e575.tar.gz
+a85c655c09e0e6b4ae17763a74762d27dfd88194b767d1d73743618050afa827ea487a52a65a00138b2ce76c80057de5b25b5930afe13d6b78761c258d374c8e  musl-compat.h
+86c7731db9333cabb294c0df478338ebff1e6485077f17ca1623e42face733be50734ea1c54a8f4418293424878e5fa75f0830b654d7afeebcb5c8a4d9ec45ee  0001-shmem-phy-fall-back-to-mainline-dma-heaps.patch
+3d52cb9f004238643e7889791bec8c8a9f1b235e9c14a401d93c2363e113063d14ab8a47add03e6d83526368e13c3b543f4d55dda704baf204e9a2fc0cb46bca  msm_audio.h
+"

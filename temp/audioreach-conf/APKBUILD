@@ -1,0 +1,41 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=audioreach-conf
+pkgver=1.1.2_git20260929
+pkgrel=0
+_commit="d9b13696adc1e0fd34a6ce8ef383763a981574b9"
+pkgdesc="AudioReach key-value headers and platform configuration (Qualcomm variant)"
+url="https://github.com/AudioReach/audioreach-conf"
+arch="aarch64"
+license="BSD-3-Clause-Clear"
+depends=""
+makedepends="autoconf automake libtool linux-headers"
+subpackages=""
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-conf/archive/$_commit.tar.gz
+"
+builddir="$srcdir/audioreach-conf-$_commit"
+options="!check"
+
+prepare() {
+	default_prepare
+	autoreconf -fi
+}
+
+build() {
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--localstatedir=/var \
+		--with-qcom
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+sha512sums="
+76eb29b95334ce4a71eec8c2965a23058ae741ef6a5527edc07118c820e87ed1147f3dddfda39ec972d93cae56963eac3550e4736ae858ff4f86577d83380387  audioreach-conf-d9b13696adc1e0fd34a6ce8ef383763a981574b9.tar.gz
+"
