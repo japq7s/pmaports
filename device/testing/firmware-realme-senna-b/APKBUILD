@@ -1,0 +1,30 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=firmware-realme-senna-b
+pkgver=1
+pkgrel=3
+_commit="87a1b8f4ec31a861759ec6a3bd27df5eb93ab718"
+pkgdesc="GPU, DSP and audio firmware for Realme GT Neo5 150W"
+url="https://github.com/japq7s/firmware-realme-senna-b"
+arch="aarch64"
+license="proprietary"
+options="!strip !check !archcheck !tracedeps pmb:cross-native"
+
+# Only the files the mainline port loads; sources and versions are listed in
+# README.md of the firmware repository. The tree mirrors the install location:
+# lib/firmware (GPU, remoteproc, IPA, modem configuration), usr/lib/rfsa/adsp
+# (TFA9874 modules the ADSP audio PD loads over FastRPC) and etc/acdbdata
+# (AudioReach calibration). The PD maps (*.jsn) are not needed: the kernel
+# has an in-kernel PD mapper (QCOM_PD_MAPPER).
+source="$pkgname-$_commit.tar.gz::https://github.com/japq7s/firmware-realme-senna-b/archive/$_commit.tar.gz"
+builddir="$srcdir/firmware-realme-senna-b-$_commit"
+
+package() {
+	mkdir -p "$pkgdir"
+	cp -r lib usr etc "$pkgdir"/
+	find "$pkgdir" -type f -exec chmod 644 {} +
+	find "$pkgdir" -type d -exec chmod 755 {} +
+}
+
+sha512sums="
+2a52d379d216ada993d8e0f383bb0435c8df5e7535000d26d319eb13feb3fd34e2d34558ec32a77d2bd1c5d840140c2e9e310a1b902987edff2bde9539e1fa78  firmware-realme-senna-b-87a1b8f4ec31a861759ec6a3bd27df5eb93ab718.tar.gz
+"
