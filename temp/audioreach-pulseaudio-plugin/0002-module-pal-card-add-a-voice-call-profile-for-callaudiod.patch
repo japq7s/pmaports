@@ -1,0 +1,352 @@
+From 121de77adedd6a62a598a0c8960042589a35f554 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Sun, 11 Oct 2026 16:23:15 +0200
+Subject: [PATCH 2/2] module-pal-card: add a voice call profile for callaudiod
+
+callaudiod drives calls by switching the card to a profile named
+"Voice Call" (and back to "HiFi") and picks the card by its speaker and
+earpiece ports. Provide that:
+
+- name the default profile "HiFi" and add a "Voice Call" profile;
+- set port types from the port names (speaker/earpiece/mic) and map the
+  "earpiece" port to PAL_DEVICE_OUT_HANDSET;
+- on "Voice Call", move the sink to the earpiece port, suspend the PCM
+  sinks/sources (the voice session needs the same backends) and open a
+  hostless PAL_STREAM_VOICE_CALL session (VSID VOICEMMODE1); switching
+  back to "HiFi" closes it and resumes the PCM streams on the speaker;
+- follow sink port changes during a call (speakerphone) with
+  pal_stream_set_device() and source mute changes with a TX device mute;
+- voice_volume= module argument (0..1, default 0) for the in-call level.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../module-pal-card/src/module-pal-card.c     | 240 +++++++++++++++++-
+ .../module-pal-card/src/pal-utils.c           |   1 +
+ 2 files changed, 239 insertions(+), 2 deletions(-)
+
+diff --git a/module-pal-card/src/module-pal-card.c b/module-pal-card/src/module-pal-card.c
+index 3c9ff82..824db30 100644
+--- a/module-pal-card/src/module-pal-card.c
++++ b/module-pal-card/src/module-pal-card.c
+@@ -47,7 +47,9 @@ void load_pal_service();
+ #endif
+ 
+ #define PAL_CARD_NAME_PREFIX "pal."
+-#define DEFAULT_PROFILE "default"
++#define DEFAULT_PROFILE "HiFi"
++/* profile names callaudiod looks for */
++#define VOICE_PROFILE "Voice Call"
+ #define DEFAULT_SCO_SAMPLE_RATE 16000
+ #define SCO_SAMPLE_RATE_8K 8000
+ 
+@@ -67,6 +69,7 @@ static const char* const valid_modargs[] = {
+     "module",
+     "conf_dir_name",
+     "conf_file_name",
++    "voice_volume",
+     NULL
+ };
+ 
+@@ -90,6 +93,10 @@ struct userdata {
+     char *conf_dir_name;
+     char *conf_file_name;
+ 
++    pal_stream_handle_t *voice_handle;
++    pal_device_id_t voice_rx;
++    float voice_volume;
++
+     bool agm_inited;
+     bool pal_inited;
+     bool extn_inited;
+@@ -144,6 +151,13 @@ static void pa_pal_card_create_ports(struct userdata *u, pa_hashmap *ports, pa_h
+         pa_device_port_new_data_set_description(&port_data, config_port->description);
+         pa_device_port_new_data_set_direction(&port_data, config_port->direction);
+         pa_device_port_new_data_set_available(&port_data, config_port->available);
++        /* callaudiod picks the card by port type (speaker + earpiece) */
++        if (strstr(config_port->name, "earpiece"))
++            pa_device_port_new_data_set_type(&port_data, PA_DEVICE_PORT_TYPE_EARPIECE);
++        else if (strstr(config_port->name, "speaker"))
++            pa_device_port_new_data_set_type(&port_data, PA_DEVICE_PORT_TYPE_SPEAKER);
++        else if (strstr(config_port->name, "mic"))
++            pa_device_port_new_data_set_type(&port_data, PA_DEVICE_PORT_TYPE_MIC);
+ 
+         port = pa_device_port_new(u->core, &port_data, sizeof(pa_pal_card_port_device_data));
+ 
+@@ -202,11 +216,217 @@ static void pa_pal_card_create_profiles_and_add_ports(struct userdata *u, pa_has
+             pa_hashmap_put(card_port->profiles, profile->name, profile);
+         }
+     }
++
++    /* Voice call profile: same sinks, the call itself is a hostless PAL
++     * voice session opened in pa_pal_card_set_profile() */
++    if (!pa_hashmap_get(profiles, VOICE_PROFILE)) {
++        pa_device_port *p;
++        void *state2;
++
++        profile = pa_card_profile_new(VOICE_PROFILE, "Voice call", 0);
++        profile->priority = 100;
++        profile->n_sinks = 1;
++        profile->n_sources = 0;
++        profile->available = PA_AVAILABLE_YES;
++        pa_hashmap_put(profiles, profile->name, profile);
++        PA_HASHMAP_FOREACH(p, ports, state2)
++            pa_hashmap_put(p->profiles, profile->name, profile);
++    }
++}
++
++static void pa_pal_card_voice_stop(struct userdata *u) {
++    if (!u->voice_handle)
++        return;
++    pa_log_info("voice call: stop %d", pal_stream_stop(u->voice_handle));
++    pa_log_info("voice call: close %d", pal_stream_close(u->voice_handle));
++    u->voice_handle = NULL;
++}
++
++static void pa_pal_card_voice_set_volume(struct userdata *u) {
++    struct {
++        uint32_t no_of_volpair;
++        struct pal_channel_vol_kv pair[1];
++    } vol;
++
++    vol.no_of_volpair = 1;
++    vol.pair[0].channel_mask = 0x1;
++    vol.pair[0].vol = u->voice_volume;
++    pa_log_info("voice call: volume %.2f -> %d", u->voice_volume,
++                pal_stream_set_volume(u->voice_handle, (struct pal_volume_data *)&vol));
++}
++
++/* the card's (single) PCM sink; its active port selects the call output */
++static pa_sink *pa_pal_card_get_sink(struct userdata *u) {
++    pa_sink *sink;
++    uint32_t idx;
++
++    PA_IDXSET_FOREACH(sink, u->card->sinks, idx)
++        return sink;
++    return NULL;
++}
++
++static void pa_pal_card_set_sink_port(struct userdata *u, const char *port) {
++    pa_sink *sink = pa_pal_card_get_sink(u);
++
++    if (sink && pa_hashmap_get(sink->ports, port) &&
++        (!sink->active_port || !pa_streq(sink->active_port->name, port)))
++        pa_log_info("voice call: sink port -> %s: %d", port, pa_sink_set_port(sink, port, false));
++}
++
++/* speaker port = speakerphone, anything else (earpiece) = handset */
++static pal_device_id_t pa_pal_card_voice_rx_for_port(struct userdata *u) {
++    pa_sink *sink = pa_pal_card_get_sink(u);
++
++    if (sink && sink->active_port && pa_streq(sink->active_port->name, "speaker"))
++        return PAL_DEVICE_OUT_SPEAKER;
++    return PAL_DEVICE_OUT_HANDSET;
++}
++
++static void pa_pal_card_voice_fill_devices(struct pal_device *dev, pal_device_id_t rx) {
++    memset(dev, 0, 2 * sizeof(*dev));
++    dev[0].id = rx;
++    dev[0].config.sample_rate = 48000;
++    dev[0].config.bit_width = 16;
++    dev[0].config.ch_info.channels = 2;
++    dev[0].config.ch_info.ch_map[0] = PAL_CHMAP_CHANNEL_FL;
++    dev[0].config.ch_info.ch_map[1] = PAL_CHMAP_CHANNEL_FR;
++    dev[0].config.aud_fmt_id = PAL_AUDIO_FMT_PCM_S16_LE;
++    dev[1] = dev[0];
++    /* TODO: speaker mic for speakerphone once its mixer path is verified */
++    dev[1].id = PAL_DEVICE_IN_HANDSET_MIC;
++    dev[1].config.ch_info.channels = 1;
++}
++
++static void pa_pal_card_voice_set_mic_mute(struct userdata *u, bool mute) {
++    struct {
++        pal_param_payload hdr;
++        pal_device_mute_t mute;
++    } p;
++
++    memset(&p, 0, sizeof(p));
++    p.hdr.payload_size = sizeof(p.mute);
++    p.mute.dir = PAL_AUDIO_INPUT;
++    p.mute.mute = mute;
++    pa_log_info("voice call: mic %s -> %d", mute ? "mute" : "unmute",
++                pal_stream_set_param(u->voice_handle, PAL_PARAM_ID_DEVICE_MUTE, &p.hdr));
+ }
+ 
++static pa_hook_result_t pa_pal_card_sink_port_changed_cb(pa_core *c, pa_sink *sink, struct userdata *u) {
++    struct pal_device dev[2];
++    pal_device_id_t rx;
++
++    if (!u->voice_handle || sink->card != u->card)
++        return PA_HOOK_OK;
++
++    rx = pa_pal_card_voice_rx_for_port(u);
++    if (rx == u->voice_rx)
++        return PA_HOOK_OK;
++
++    pa_pal_card_voice_fill_devices(dev, rx);
++    pa_log_info("voice call: output -> %s: %d",
++                rx == PAL_DEVICE_OUT_SPEAKER ? "speaker" : "earpiece",
++                pal_stream_set_device(u->voice_handle, 2, dev));
++    u->voice_rx = rx;
++    return PA_HOOK_OK;
++}
++
++static pa_hook_result_t pa_pal_card_source_mute_changed_cb(pa_core *c, pa_source *source, struct userdata *u) {
++    if (u->voice_handle && source->card == u->card && !source->monitor_of)
++        pa_pal_card_voice_set_mic_mute(u, source->muted);
++    return PA_HOOK_OK;
++}
++
++static int pa_pal_card_voice_start(struct userdata *u) {
++    struct pal_stream_attributes a;
++    struct pal_device dev[2];
++    pa_source *source;
++    uint32_t idx;
++    int rc;
++
++    if (u->voice_handle)
++        return 0;
++
++    memset(&a, 0, sizeof(a));
++    a.type = PAL_STREAM_VOICE_CALL;
++    a.direction = PAL_AUDIO_INPUT_OUTPUT;
++    a.info.voice_call_info.VSID = VOICEMMODE1;
++    a.info.voice_call_info.tty_mode = PAL_TTY_OFF;
++    a.in_media_config.sample_rate = 48000;
++    a.in_media_config.bit_width = 16;
++    a.in_media_config.ch_info.channels = 1;
++    a.in_media_config.ch_info.ch_map[0] = PAL_CHMAP_CHANNEL_FL;
++    a.in_media_config.aud_fmt_id = PAL_AUDIO_FMT_PCM_S16_LE;
++    a.out_media_config = a.in_media_config;
++
++    u->voice_rx = pa_pal_card_voice_rx_for_port(u);
++    pa_pal_card_voice_fill_devices(dev, u->voice_rx);
++
++    rc = pal_stream_open(&a, 2, dev, 0, NULL, NULL, 0, &u->voice_handle);
++    pa_log_info("voice call: open %d", rc);
++    if (rc) {
++        u->voice_handle = NULL;
++        return rc;
++    }
++
++    /* volume before start is cached by PAL and applied with the graph */
++    pa_pal_card_voice_set_volume(u);
++    rc = pal_stream_start(u->voice_handle);
++    pa_log_info("voice call: start %d", rc);
++    if (rc) {
++        pal_stream_close(u->voice_handle);
++        u->voice_handle = NULL;
++        return rc;
++    }
++    pa_pal_card_voice_set_volume(u);
++
++    PA_IDXSET_FOREACH(source, u->card->sources, idx)
++        if (!source->monitor_of && source->muted)
++            pa_pal_card_voice_set_mic_mute(u, true);
++    return 0;
++}
++
++
++static void pa_pal_card_suspend_streams(struct userdata *u, bool suspend) {
++    pa_sink *sink;
++    pa_source *source;
++    uint32_t idx;
++
++    PA_IDXSET_FOREACH(sink, u->card->sinks, idx)
++        pa_log_info("voice call: %s sink %s -> %d", suspend ? "suspend" : "resume", sink->name,
++                    pa_sink_suspend(sink, suspend, PA_SUSPEND_UNAVAILABLE));
++    PA_IDXSET_FOREACH(source, u->card->sources, idx) {
++        if (source->monitor_of)
++            continue;
++        pa_log_info("voice call: %s source %s -> %d", suspend ? "suspend" : "resume", source->name,
++                    pa_source_suspend(source, suspend, PA_SUSPEND_UNAVAILABLE));
++    }
++}
+ 
+ static int pa_pal_card_set_profile(pa_card *c, pa_card_profile *new_profile) {
+-    pa_log_error("profile change not supported yet");
++    struct userdata *u = c->userdata;
++
++    pa_assert(u);
++    pa_log_info("profile -> %s", new_profile->name);
++
++    if (pa_streq(new_profile->name, VOICE_PROFILE)) {
++        /* calls start on the earpiece; callaudiod switches the port to
++         * "speaker" for speakerphone (see sink_port_changed_cb) */
++        pa_pal_card_set_sink_port(u, "earpiece");
++        /* the voice session needs the same backends (MI2S RX, CDC DMA TX)
++         * as the PCM sink/source: close those streams first, like Android */
++        pa_pal_card_suspend_streams(u, true);
++        if (pa_pal_card_voice_start(u)) {
++            pa_pal_card_set_sink_port(u, "speaker");
++            pa_pal_card_suspend_streams(u, false);
++            return -PA_ERR_IO;
++        }
++        return 0;
++    }
++
++    pa_pal_card_voice_stop(u);
++    /* back to the loudspeaker port before the PCM streams reopen */
++    pa_pal_card_set_sink_port(u, "speaker");
++    pa_pal_card_suspend_streams(u, false);
+     return 0;
+ }
+ 
+@@ -231,6 +451,7 @@ static int pa_pal_card_create(struct userdata *u) {
+     data.namereg_fail = true;
+ 
+     pa_proplist_setf(data.proplist, PA_PROP_DEVICE_DESCRIPTION, "Card for the %s HAL module", u->module_name);
++    pa_proplist_sets(data.proplist, "alsa.card_name", "pal-card");
+ 
+     pa_pal_card_create_ports(u, data.ports, data.profiles);
+     pa_pal_card_create_profiles_and_add_ports(u, data.profiles, data.ports);
+@@ -1106,6 +1327,14 @@ int pa__init(pa_module *m) {
+ 
+     u->conf_dir_name = pa_xstrdup(pa_modargs_get_value(ma, "conf_dir_name", NULL));
+     u->conf_file_name = pa_xstrdup(pa_modargs_get_value(ma, "conf_file_name", NULL));
++    /* 0.0 = lowest voice RX step; raise with voice_volume=0..1 */
++    u->voice_volume = 0.0f;
++    {
++        const char *vv = pa_modargs_get_value(ma, "voice_volume", NULL);
++        double d;
++        if (vv && pa_atod(vv, &d) == 0 && d >= 0.0 && d <= 1.0)
++            u->voice_volume = (float)d;
++    }
+ 
+     u->config_data = pa_pal_config_parse_new(u->conf_dir_name, u->conf_file_name);
+     if (!u->config_data) {
+@@ -1159,6 +1388,11 @@ int pa__init(pa_module *m) {
+         pa_log_error("pal extn init failed\n");
+     else
+         u->extn_inited = true;
++
++    pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_SINK_PORT_CHANGED], PA_HOOK_LATE,
++                           (pa_hook_cb_t) pa_pal_card_sink_port_changed_cb, u);
++    pa_module_hook_connect(m, &m->core->hooks[PA_CORE_HOOK_SOURCE_MUTE_CHANGED], PA_HOOK_LATE,
++                           (pa_hook_cb_t) pa_pal_card_source_mute_changed_cb, u);
+     pa_log_debug("Pal extn module loaded successfully\n", __func__);
+ 
+     if (pa_hashmap_size(u->config_data->loopbacks)) {
+@@ -1193,6 +1427,8 @@ void pa__done(pa_module *m) {
+ 
+     /* a failed init (e.g. a greeter session without access to the audio
+      * nodes) gets here too: only tear down what was set up */
++    pa_pal_card_voice_stop(u);
++
+     if (u->extn_inited)
+         pa_pal_module_extn_deinit();
+     pa_pal_loopback_deinit();
+diff --git a/module-pal-card/src/pal-utils.c b/module-pal-card/src/pal-utils.c
+index e0642eb..86bb763 100644
+--- a/module-pal-card/src/pal-utils.c
++++ b/module-pal-card/src/pal-utils.c
+@@ -49,6 +49,7 @@ typedef struct {
+ 
+ pa_pal_util_port_to_pal_device_mapping port_to_pal_device[] = {
+     { (char *)"speaker",          PAL_DEVICE_OUT_SPEAKER,               (char *)"PAL_DEVICE_OUT_SPEAKER" },
++    { (char *)"earpiece",         PAL_DEVICE_OUT_HANDSET,               (char *)"PAL_DEVICE_OUT_HANDSET" },
+     { (char *)"lineout",          PAL_DEVICE_OUT_LINE,                  (char *)"PAL_DEVICE_OUT_LINE" },
+     { (char *)"headset",          PAL_DEVICE_OUT_WIRED_HEADSET,         (char *)"PAL_DEVICE_OUT_WIRED_HEADSET" },
+     { (char *)"headphone",        PAL_DEVICE_OUT_WIRED_HEADPHONE,       (char *)"PAL_DEVICE_OUT_WIRED_HEADPHONE" },
+-- 
+2.55.0
+

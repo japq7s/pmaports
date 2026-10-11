@@ -1,0 +1,63 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=audioreach-pulseaudio-plugin
+pkgver=1.0.0_git20260123
+pkgrel=4
+_commit="899c030b64df55fd42493dec1dbe7872bde14f24"
+# must match the pulseaudio version in the repo: modules use pulsecore internals
+_paver=17.0
+pkgdesc="PulseAudio module-pal-card: PulseAudio sinks/sources on top of AudioReach PAL"
+url="https://github.com/AudioReach/audioreach-pulseaudio-plugin"
+arch="aarch64"
+license="BSD-3-Clause-Clear"
+depends="pulseaudio~$_paver audioreach-pal"
+makedepends="autoconf automake libtool linux-headers glib-dev dbus-dev pulseaudio-dev
+	audioreach-pal-dev audioreach-graphmgr-dev"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-pulseaudio-plugin/archive/$_commit.tar.gz
+	https://freedesktop.org/software/pulseaudio/releases/pulseaudio-$_paver.tar.xz
+	0001-module-pal-card-only-tear-down-what-was-initialised.patch
+	0002-module-pal-card-add-a-voice-call-profile-for-callaudiod.patch
+"
+builddir="$srcdir/audioreach-pulseaudio-plugin-$_commit/modules/pa-pal-plugins"
+options="!check"
+
+prepare() {
+	default_prepare
+	mkdir -p m4
+	autoreconf -fi
+}
+
+build() {
+	# pulsecore headers are not shipped by pulseaudio-dev; take them from
+	# the matching upstream release. Compress offload needs a Qualcomm-patched
+	# pulseaudio (extra pa_encoding values, pa_sink fields), so it is disabled.
+	# pulsecore headers expect pulseaudio's own config.h; reproduce the
+	# Linux/musl values of Alpine's build (GCC atomics, not libatomic_ops;
+	# system poll.h/sys/socket.h, otherwise pulsecore defines its own types).
+	local pa_config="-DHAVE_ATOMIC_BUILTINS -DHAVE_ATOMIC_BUILTINS_MEMORY_MODEL
+		-DHAVE_SYS_SOCKET_H -DHAVE_SYS_RESOURCE_H -DHAVE_POLL_H -DHAVE_ARPA_INET_H
+		-DHAVE_PWD_H -DHAVE_GRP_H -DHAVE_BYTESWAP_H -DHAVE_CLOCK_GETTIME -DHAVE_PIPE
+		-DHAVE_IPV6 -DHAVE_MEMFD -DHAVE_DBUS"
+	export CFLAGS="$CFLAGS -I$srcdir/pulseaudio-$_paver/src $(echo $pa_config)"
+	./configure \
+		--build=$CBUILD \
+		--host=$CHOST \
+		--prefix=/usr \
+		--sysconfdir=/etc \
+		--with-pa_version=$_paver \
+		--without-pa-support-card-status \
+		--without-pa-compress-audio-support
+	make
+}
+
+package() {
+	make DESTDIR="$pkgdir" install
+	find "$pkgdir" -name '*.la' -delete
+}
+
+sha512sums="
+fac0067bfd22fb44d6b62a8422dcafd2d1a9c9f56d8a03d60ca71f6ae1b6f9b7edc631cd055c4a2275900adc598310b7bd3a8c5a4cc1a41ca84660c8ca0f7891  audioreach-pulseaudio-plugin-899c030b64df55fd42493dec1dbe7872bde14f24.tar.gz
+be0aec46204d9c9188a796fbe41b4cf6f0f5e6b16fa08ce359b8f0f51253f0ade364b89448bbf5faa2af7e59deb6c72194734c3233944250dcfd4f31968a5e97  pulseaudio-17.0.tar.xz
+f6d8e2c8fddf230a55afff891961daa4dfbcef248ac719e9ac93be18bb641d2715cd6d5111ceb5082b93d061e26d24f4bece72722b2dd4edb87afcacbf923076  0001-module-pal-card-only-tear-down-what-was-initialised.patch
+e36be60ee76cd65352e5e9a6e97f3cdee98d3d89e785b6e7d041e9713917049d24410d03085be58fffc8e1a93bd99855d5ff88b12673e0be76878869dc64ac55  0002-module-pal-card-add-a-voice-call-profile-for-callaudiod.patch
+"
