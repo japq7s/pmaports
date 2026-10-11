@@ -1,0 +1,5 @@
+# WORKAROUND (MAINLINE-LOG 2026-10-04): the GMU does not come back after GPU
+# runtime suspend ("Timeout waiting for GMU OOB set GPU_SET" -> hangcheck),
+# even with the upstream GMU fixes backported. Keep GPU and GMU powered.
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="3d00000.gpu", ATTR{power/control}="on"
+ACTION=="add", SUBSYSTEM=="platform", KERNEL=="3d6a000.gmu", ATTR{power/control}="on"

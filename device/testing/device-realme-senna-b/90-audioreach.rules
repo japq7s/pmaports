@@ -1,0 +1,6 @@
+# AudioReach userspace (AGM/PAL inside the user's PulseAudio) needs the GPR
+# passthrough, the SMMU mapping node and the system DMA-BUF heap.
+KERNEL=="aud_pasthru_adsp|msm_audio_mem", GROUP="audio", MODE="0660"
+SUBSYSTEM=="dma_heap", KERNEL=="system", GROUP="audio", MODE="0660"
+# Card 0 is driven by AGM/PAL (module-pal-card), not by module-udev-detect.
+SUBSYSTEM=="sound", ATTRS{id}=="SM8475realmesen", ENV{PULSE_IGNORE}="1"

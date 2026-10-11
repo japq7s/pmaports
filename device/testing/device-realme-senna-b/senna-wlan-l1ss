@@ -1,0 +1,58 @@
+#!/bin/sh
+# Program the ASPM L1.2 LTR threshold of the WCN6855 link as the downstream
+# Qualcomm driver does (qcom,l1-2-th-scale = 2, qcom,l1-2-th-value = 150,
+# i.e. 153.6 us; the 5.10 and 6.6 Android kernels run L1.2 with it).
+# The kernel computes 76.8 us, and with that the PCIe link went down 25-50 s
+# after boot ("Recovering Root Port due to Link Down"), leaving ath11k dead.
+# The threshold may only change while L1.2 is disabled.
+#
+# Usage (udev): senna-wlan-l1ss <devpath of the endpoint>
+set -eu
+
+ep=/sys$1
+rp=$(readlink -f "$ep/..")
+link=$ep/link
+
+rd32() {
+	od -An -tu4 -j "$2" -N4 "$1" | tr -d ' '
+}
+
+# offset of the L1 PM Substates extended capability (ID 0x1e)
+l1ss_cap() {
+	off=256
+	while [ "$off" -ne 0 ]; do
+		h=$(rd32 "$1" "$off")
+		[ "$h" -ne 0 ] || return 1
+		if [ $((h & 0xffff)) -eq 30 ]; then
+			echo "$off"
+			return 0
+		fi
+		off=$(((h >> 20) & 0xffc))
+	done
+	return 1
+}
+
+set_threshold() {
+	ctl1=$(($(l1ss_cap "$1") + 8))
+	v=$(rd32 "$1" "$ctl1")
+	v=$(((v & ~((0x3ff << 16) | (7 << 29))) | (150 << 16) | (2 << 29)))
+	# Through a file, not a pipe: printf flushes at a 0x0a byte and dd then
+	# writes a short block.
+	tmp=$(mktemp)
+	# shellcheck disable=SC2059
+	printf "$(printf '\\%03o\\%03o\\%03o\\%03o' $((v & 255)) \
+		$(((v >> 8) & 255)) $(((v >> 16) & 255)) $(((v >> 24) & 255)))" > "$tmp"
+	dd if="$tmp" of="$1" bs=4 seek=$((ctl1 / 4)) count=1 conv=notrunc 2>/dev/null
+	rm -f "$tmp"
+	if [ "$(rd32 "$1" "$ctl1")" -ne "$v" ]; then
+		echo "senna-wlan-l1ss: $1: L1SS_CTL1 not written" >&2
+		return 1
+	fi
+}
+
+echo 0 > "$link/l1_2_aspm"
+echo 0 > "$link/l1_2_pcipm"
+set_threshold "$rp/config"
+set_threshold "$ep/config"
+echo 1 > "$link/l1_2_pcipm"
+echo 1 > "$link/l1_2_aspm"

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="ISO-8859-1"?>
+<!-- Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+SPDX-License-Identifier: BSD-3-Clause-Clear
+* -->
+
+<plugin_manager_info>
+    <version>1.0</version>
+    <!-- .so mapping for all streams supported on target-->
+    <streams>
+        <stream name="PAL_STREAM_DEEP_BUFFER" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_LOW_LATENCY" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_GENERIC" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_RAW" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_VOICE_RECOGNITION" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_PCM_OFFLOAD" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_ULTRA_LOW_LATENCY" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+        <stream name="PAL_STREAM_VOICE_UI" lib="libstream_soundtrigger.so" entryFunction="CreateSoundTriggerStream"/>
+        <stream name="PAL_STREAM_COMPRESSED" lib="libstream_compress.so" entryFunction="CreateCompressStream"/>
+        <stream name="PAL_STREAM_VOICE_CALL" lib="libstream_pcm.so" entryFunction="CreatePCMStream"/>
+    </streams>
+    <sessions>
+        <session name="PAL_STREAM_DEEP_BUFFER" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_LOW_LATENCY" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_GENERIC" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_RAW" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_VOICE_RECOGNITION" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_PCM_OFFLOAD" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_ULTRA_LOW_LATENCY" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_VOICE_UI" lib="libsession_pcm.so" entryFunction="CreatePcmSession"/>
+        <session name="PAL_STREAM_COMPRESSED" lib="libsession_compress.so" entryFunction="CreateCompressSession"/>
+        <session name="PAL_STREAM_VOICE_CALL" lib="libsession_voice.so" entryFunction="CreateVoiceSession"/>
+    </sessions>
+    <devices>
+        <!--Handset-->
+        <device name="PAL_DEVICE_OUT_HANDSET" lib="libdev_handset.so" entryFunction="CreateHandsetDevice"/>
+        <device name="PAL_DEVICE_IN_HANDSET_MIC" lib="libdev_handset_mic.so" entryFunction="CreateHandsetMicDevice"/>
+        <!-- Added for SVA -->
+        <device name="PAL_DEVICE_IN_HANDSET_VA_MIC" lib="libdev_handset_mic.so" entryFunction="CreateHandsetMicDevice"/>
+        <!--Speaker-->
+        <device name="PAL_DEVICE_OUT_SPEAKER" lib="libdev_speaker.so" entryFunction="CreateSpeakerDevice"/>
+        <device name="PAL_DEVICE_IN_SPEAKER_MIC" lib="libdev_speaker_mic.so" entryFunction="CreateSpeakerMicDevice"/>
+        <device name="PAL_DEVICE_IN_CPS_FEEDBACK" lib="libdev_speaker.so" entryFunction="CreateSpeakerDevice"/>
+        <device name="PAL_DEVICE_IN_CPS2_FEEDBACK" lib="libdev_speaker.so" entryFunction="CreateSpeakerDevice"/>
+        <device name="PAL_DEVICE_IN_VI_FEEDBACK" lib="libdev_speaker.so" entryFunction="CreateSpeakerDevice"/>
+        <!--Headphone -->
+        <device name="PAL_DEVICE_OUT_WIRED_HEADSET" lib="libdev_headphone.so" entryFunction="CreateHeadphoneDevice"/>
+        <device name="PAL_DEVICE_OUT_WIRED_HEADPHONE" lib="libdev_headphone.so" entryFunction="CreateHeadphoneDevice"/>
+        <!--Headset-->
+        <device name="PAL_DEVICE_IN_WIRED_HEADSET" lib="libdev_headset_mic.so" entryFunction="CreateHeadsetMicDevice"/>
+        <!--Dummy-->
+        <device name="PAL_DEVICE_IN_EXT_EC_REF" lib="libdev_ext_ec.so" entryFunction="CreateExtEcDevice"/>
+        <device name="PAL_DEVICE_IN_ECHO_REF" lib="libdev_ec_ref.so" entryFunction="CreateECRefDevice"/>
+    </devices>
+    <configs>
+        <!--pcm_config-->
+        <config name="PAL_STREAM_DEEP_BUFFER" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_LOW_LATENCY" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_GENERIC" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_RAW" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_VOICE_RECOGNITION" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_PCM_OFFLOAD" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_ULTRA_LOW_LATENCY" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <config name="PAL_STREAM_VOICE_UI" lib="libsession_pcm_config.so" entryFunction="pcmPluginConfig"/>
+        <!-- compress_config -->
+        <config name="PAL_STREAM_COMPRESSED" lib="libsession_compress_config.so" entryFunction="compressPluginConfig"/>
+        <config name="PAL_STREAM_VOICE_CALL" lib="libsession_voice_config.so" entryFunction="voicePluginConfig"/>
+    </configs>
+</plugin_manager_info>

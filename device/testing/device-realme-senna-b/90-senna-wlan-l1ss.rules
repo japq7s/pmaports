@@ -1,0 +1,3 @@
+# WCN6855: program the ASPM L1.2 threshold as the downstream driver does,
+# see /usr/libexec/senna-wlan-l1ss
+ACTION=="add", SUBSYSTEM=="pci", ATTR{vendor}=="0x17cb", ATTR{device}=="0x1103", RUN+="/usr/libexec/senna-wlan-l1ss %p"
