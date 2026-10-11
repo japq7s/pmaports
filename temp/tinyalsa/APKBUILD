@@ -1,0 +1,41 @@
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=tinyalsa
+pkgver=2.0.0_git20260929
+pkgrel=1
+_commit="961babfe962e71d952ae734074cc89576b28a9e7"
+pkgdesc="Small library to interface with ALSA (with plugin support, needed by AudioReach AGM)"
+url="https://github.com/tinyalsa/tinyalsa"
+arch="aarch64"
+license="BSD-3-Clause"
+depends=""
+# newer than Alpine's tinyalsa (needed by AudioReach AGM), same soname
+provides="tinyalsa-libs=$pkgver-r$pkgrel"
+replaces="tinyalsa-libs"
+makedepends="meson linux-headers"
+subpackages="$pkgname-dev $pkgname-doc $pkgname-utils"
+source="
+	$pkgname-$_commit.tar.gz::https://github.com/tinyalsa/tinyalsa/archive/$_commit.tar.gz
+"
+builddir="$srcdir/tinyalsa-$_commit"
+options="!check"
+
+
+
+build() {
+	# meson.build (unlike CMake) does not define it; without it mixer_open()/pcm_open()
+	# never reach the virtual-card plugins that AudioReach AGM uses
+	CFLAGS="$CFLAGS -DTINYALSA_USES_PLUGINS" abuild-meson . output
+	meson compile -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+}
+
+utils() {
+	pkgdesc="$pkgdesc (utilities)"
+	amove usr/bin
+}
+sha512sums="
+58385caef8624bb3265c44aadd73ed3d1a1e77e4a4c7ae975e643caa2aff3fa8a01e361e9feb91dbafea7d322c35b37bb5ade5ebd24a24c0c721249a53ea5cee  tinyalsa-961babfe962e71d952ae734074cc89576b28a9e7.tar.gz
+"
