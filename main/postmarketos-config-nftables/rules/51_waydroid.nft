@@ -1,0 +1,11 @@
+#!/usr/sbin/nft -f
+table inet filter {
+	chain input {
+		iifname "waydroid0" accept comment "Allow DHCP, DNS and other traffic from the Waydroid container"
+	}
+
+	chain forward {
+		iifname "waydroid0" accept comment "Allow outgoing network traffic from Waydroid"
+		oifname "waydroid0" ct state {established, related} accept comment "Allow replies to Waydroid"
+	}
+}
