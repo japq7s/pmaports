@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=17
+pkgrel=18
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -27,7 +27,6 @@ depends="
 	soc-qcom-modem
 	rmtfs
 	tqftpserv
-	audioreach-pulseaudio-plugin
 	audioreach-pal
 	audioreach-graphmgr
 	fastrpc
@@ -35,6 +34,12 @@ depends="
 	fastrpc-udev
 "
 makedepends="devicepkg-dev"
+# The PAL nodes live in the sound server: one subpackage per audio backend,
+# pulled in by the backend chosen for postmarketos-base-ui.
+subpackages="
+	$pkgname-pulseaudio:_pulseaudio
+	$pkgname-pipewire:_pipewire
+"
 # AudioReach board configuration replaces the reference files of these
 replaces="audioreach-conf audioreach-graphmgr audioreach-pal"
 source="
@@ -52,6 +57,7 @@ source="
 	adsprpcd_audiopd-senna.conf
 	pulseaudio-pal.pa
 	pulseaudio-daemon-senna.conf
+	pipewire-pal.conf
 	senna-voice-volume
 	audio-pal-card.conf
 	audio-backend_conf.xml
@@ -105,6 +111,8 @@ package() {
 		"$pkgdir"/etc/pulse/pal/default.conf
 	install -Dm755 "$srcdir"/senna-voice-volume \
 		"$pkgdir"/usr/bin/senna-voice-volume
+	install -Dm644 "$srcdir"/pipewire-pal.conf \
+		"$pkgdir"/usr/share/pipewire/pipewire.conf.d/90-senna-pal.conf
 
 	install -Dm644 "$srcdir"/audio-backend_conf.xml "$pkgdir"/etc/backend_conf.xml
 	install -Dm644 "$srcdir"/audio-card-defs.xml "$pkgdir"/etc/card-defs.xml
@@ -122,6 +130,20 @@ package() {
 		"$pkgdir"/usr/lib/modules-load.d/oplus-chg.conf
 }
 
+_pulseaudio() {
+	pkgdesc="$pkgdesc: PulseAudio on AudioReach PAL"
+	install_if="$pkgname=$pkgver-r$pkgrel postmarketos-base-ui-audio-backend-pulseaudio"
+	depends="audioreach-pulseaudio-plugin"
+	amove etc/pulse usr/bin/senna-voice-volume
+}
+
+_pipewire() {
+	pkgdesc="$pkgdesc: PipeWire on AudioReach PAL (voice calls through callaudiod)"
+	install_if="$pkgname=$pkgver-r$pkgrel postmarketos-base-ui-audio-backend-pipewire"
+	depends="audioreach-pipewire-plugin"
+	amove usr/share/pipewire
+}
+
 sha512sums="
 700d09f18519571f91d8b3c2056eb8426aae67fa4b810252b3f3b72b6949b9b3ac8c3ade3b924b39700a565803c9d70340bc665546abd93b3b5e351b9a21a707  deviceinfo
 ebe83921bd566370cc548b2b2b3b158e56e2d1b25cabd793a0ddecb91e703150610599dc249968a17b427337f8b0609adcf46b778df0bfc77ce2eb43cad828e9  modules-initfs
@@ -130,7 +152,7 @@ cc561eb2ff8e5c94e5bc3ef456403ad7aee9a25d1973cdc1bcc6b132129c6c7c7b5c2cc22da75812
 a74666fd72222e21df2abeb7f69c510fd5ebbb8987ef62f81116f9cb18d2df3e982761709c33e8efc1b36e881746a711bd1695e1c2f88430009d992a9348b4d4  senna-modem-sim-recover
 6f628db6abc07d229d659d3bfa29c8b246d75648e3095174d6d7b2a03a38029571ef63480d037157a3a4817033674ae276d2ecfb99a0b244df0a845182c570da  senna-modem-system-sleep
 e378c24d69a352a505bbcf3790999991ef1159370eb3463afd659e1f7e01882236888a3e531695bf35272c128db6dbba431f2d17d7e0bbb5c7e17c8a48cb2f46  phoc.ini
-db5c1c32168bd404c5476fffde6cf30b038f62ec7bcb3579410197ac56ddd4ce8403aec3a54696806fdc48b2b7ac7c47b4a1f98624298569902d32f114128a70  90-audioreach.rules
+18621ed86de2198d082af705932c6a792b8d1ee8ae1d65aac5e4796807c1703a9999708c9a5c522ff66eb1aa8deb0ab14a740841782f7aae48302b2c50a10028  90-audioreach.rules
 5b03fab51869212eecf7397f59b8ce8309a3e48b42ac69314debd96ea9744fb3f78887bbd51c486aebf2f4836a07cff6fcc8a3502c055f6ba4372ea6c2f551d5  audioreach-blacklist.conf
 c63c851fd608d60a6684f6486b4e1ce18e631bc178e519621d2f4b815835bee803c8a0e4581a84183a59cc6c9c4e22e72f8b78ff6fae9216918a9661e4ba02ac  adsprpcd_audiopd-senna.conf
 2e501d331e5ddb93ff41c9ffcc7affb9582d13520d0328b0e41a06ab93387c7fe3b8b869bc2d7815ec899845094b8b56063956f61cd82e9453c203a14d1e7c76  pulseaudio-pal.pa
@@ -147,4 +169,5 @@ eeb5ebf1d618bf86d8baa8f9c1fc75aaf1b664fccadbd797ec8cbb9919875d5a63cc08e481626439
 b8fcf239570ae1f68f4abbce19314644ec8009a1d02c8e10e8b6fbc7104de86dc2b9a3d97016ad6df385d14ce51b9de671598bb3aff01d6534158b1bca3017a0  90-senna-wlan-l1ss.rules
 1f3f53b2d42d63fa7712dd6f0d02e09881fc24ade29e40deef0ca30ae3f8961c1c08872efadaac133491edd2e53e8fbf089354d35d2bded28b8c4fd9933db478  senna-wlan-l1ss
 b6faffbbd7564606c4398ce3c032893f2e9fd11b993a2e4e7ee9ffa7473f9d90d5c884fdef7fd73cc16cc9ab453f05bcb8fc6e0c0261471c751d78a3844729c1  pulseaudio-daemon-senna.conf
+f1640277ea91695b66d1e4bb01921fed95569d589d1ba5716803a44c3753a8d8a455e636958107b309be9ecae81c7ec6ce36999617658381452058b309aa63cb  pipewire-pal.conf
 "
