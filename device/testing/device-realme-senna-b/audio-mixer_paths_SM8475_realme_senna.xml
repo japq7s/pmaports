@@ -2018,6 +2018,7 @@
     <path name="speaker">
         <ctl name="Speaker Left Amp Switch" value="1" />
         <ctl name="Speaker Right Amp Switch" value="1" />
+        <ctl name="Speaker Left Profile" value="speaker" />
         <ctl name="TFA_CHIP_SELECTOR" value="3" />
         <ctl name="TFA Profile" value="speaker" />
         <ctl name="TFA_CHECK_FEEDBACK" value="On" />
@@ -2182,9 +2183,10 @@
     </path>
 
     <path name="handset">
-        <!-- mainline tfa9872: earpiece = left amp only -->
+        <!-- mainline tfa9872: earpiece = left amp only, stock "receiver" tuning -->
         <ctl name="Speaker Left Amp Switch" value="1" />
         <ctl name="Speaker Right Amp Switch" value="0" />
+        <ctl name="Speaker Left Profile" value="receiver" />
         <ctl name="TFA_CHIP_SELECTOR" value="1" />
         <ctl name="TFA Profile" value="receiver" />
     </path>
