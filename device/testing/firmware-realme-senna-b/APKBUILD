@@ -1,8 +1,8 @@
 # Maintainer: japq7s <japiotr123@proton.me>
 pkgname=firmware-realme-senna-b
 pkgver=1
-pkgrel=3
-_commit="87a1b8f4ec31a861759ec6a3bd27df5eb93ab718"
+pkgrel=4
+_commit="f701b426e0cd6c9c568dec3548bf297e94a628ab"
 pkgdesc="GPU, DSP and audio firmware for Realme GT Neo5 150W"
 url="https://github.com/japq7s/firmware-realme-senna-b"
 arch="aarch64"
@@ -26,5 +26,5 @@ package() {
 }
 
 sha512sums="
-2a52d379d216ada993d8e0f383bb0435c8df5e7535000d26d319eb13feb3fd34e2d34558ec32a77d2bd1c5d840140c2e9e310a1b902987edff2bde9539e1fa78  firmware-realme-senna-b-87a1b8f4ec31a861759ec6a3bd27df5eb93ab718.tar.gz
+90db5095116e82a15ead5da746867ab35967ea6e1757f8547ebcdd421bf0a47a5378c0a17f452bd8b9b95423f3592196ce26e3d95f0b68837494853f22415d15  firmware-realme-senna-b-f701b426e0cd6c9c568dec3548bf297e94a628ab.tar.gz
 "
