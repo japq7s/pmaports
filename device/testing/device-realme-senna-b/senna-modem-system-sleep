@@ -1,0 +1,5 @@
+#!/bin/sh
+# After a resume, recover ModemManager if the SIM hot-swap re-probe failed
+[ "$1" = post ] || exit 0
+systemd-run --no-block --collect --unit=senna-modem-sim-recover \
+	/usr/libexec/senna-modem-sim-recover
