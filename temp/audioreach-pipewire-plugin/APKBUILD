@@ -1,7 +1,7 @@
 # Maintainer: japq7s <japiotr123@proton.me>
 pkgname=audioreach-pipewire-plugin
 pkgver=1.0.2_git20260929
-pkgrel=0
+pkgrel=1
 _commit="5bf590fe160af6b37247fbe29a5d6941d791271d"
 pkgdesc="PipeWire module-pal: PipeWire sinks/sources and a voice call card on top of AudioReach PAL"
 url="https://github.com/AudioReach/audioreach-pipewire-plugin"
@@ -13,6 +13,7 @@ makedepends="autoconf automake libtool linux-headers expat-dev pipewire-dev
 source="
 	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-pipewire-plugin/archive/$_commit.tar.gz
 	0001-pw-pal-plugin-add-a-card-with-a-voice-call-profile.patch
+	0002-pw-pal-plugin-do-not-call-PAL-inside-log-macros.patch
 "
 builddir="$srcdir/audioreach-pipewire-plugin-$_commit"
 options="!check"
@@ -54,4 +55,5 @@ package() {
 sha512sums="
 6b1675a4efa4c65f1570739e699247b286f72e9eecf0c64a74dd95f09936acce0fc14cc73cd301a4c5dd7e85dfbd7234e02861229ac63ce64ff5c4b283402e63  audioreach-pipewire-plugin-5bf590fe160af6b37247fbe29a5d6941d791271d.tar.gz
 e4fafbe9ac4b6bb2ea842b2cb9943a1ac5b0082523e708192d8bce27f266e9460d566fa189da189c9b48d78d157a5fdadd03e0c567866645aa31d8a52ae7fb1d  0001-pw-pal-plugin-add-a-card-with-a-voice-call-profile.patch
+3c84e42f574d4656c8a24a54ca398bf7025dcee70a1e295302378515783a8e6d83d6bb2017072fc33f6732a2d5b57620ccffe26719112a5053ee595a99bfdd08  0002-pw-pal-plugin-do-not-call-PAL-inside-log-macros.patch
 "
