@@ -7,7 +7,7 @@
 _flavor="postmarketos-qcom-sm8450"
 pkgname=linux-$_flavor
 pkgver=7.3.0_rc7
-pkgrel=3
+pkgrel=4
 pkgdesc="Mainline kernel fork for SM8450/SM8475 devices"
 arch="aarch64"
 _carch="arm64"
@@ -19,7 +19,7 @@ options="!strip !check !tracedeps
 	"
 makedepends="bison findutils flex installkernel openssl-dev perl python3"
 
-_commit="d24ed59dafa17f9140a4dcb1993a9cbf4396d4f6"
+_commit="d43612a33e2f11becdce5d37c2e2b860bab076dd"
 _config="config-$_flavor.$arch"
 # AudioReach kernel drivers (GPR passthrough, audio memory, q6apm/q6prm for
 # the AudioReach userspace). They replace the upstream q6apm/q6prm ASoC
@@ -87,7 +87,7 @@ package() {
 }
 
 sha512sums="
-fb634bc68e6bd33dfa492c4aab29105f30cae4aed7be3ce006e37898133af2407b7a7bc32ade2cf118b52d17a97e2b08a082716356be3ee008fc0ee5c7b78563  linux-postmarketos-qcom-sm8450-d24ed59dafa17f9140a4dcb1993a9cbf4396d4f6.tar.gz
+b761d01b0a73e407cc2cd585fb8dd7d2e7de36053f376cfc9e8417e1bc621a43e93189a0cacef6b73604ab03cbdda77586363babb3386ac1f2bb1a8c08ec55e4  linux-postmarketos-qcom-sm8450-d43612a33e2f11becdce5d37c2e2b860bab076dd.tar.gz
 5d9d02623e0369d136a351535b1f93607c5d08081cfad3d5bde3e63b0aa9cdd14cedab73796b51a7169ca64ce9c765c15787f111c6ae83fe718208008f00d650  config-postmarketos-qcom-sm8450.aarch64
 b777a0249a4b030abd6c9a11807a24cf6bd20d1bc22ba006cbdc8e87fedbaec241d9028af4606833587784a132ca3d49d057be678519b1f2a6da3900e2850631  audioreach-kernel-07e619c32b8a63a9a0ea7cf23438b3d5f62f0baf.tar.gz
 144a7b6891d25a64c0a1b804a0f987ce52b9691220e5af2c03869231b28cb928ba8a061db726cb80b7382ac86b4a6d445f49dc773edb762fa77594610df7db19  0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
