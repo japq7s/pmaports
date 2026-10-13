@@ -22,7 +22,7 @@ deviceinfo_screen_height="2772"
 # ABL uses DTB from vendor_boot (not appended to kernel), dtbo must be erased.
 # See MAINLINE-LOG.md: "Test 2" and "Plan pmOS" for the full story.
 deviceinfo_flash_method="fastboot"
-deviceinfo_kernel_cmdline="clk_ignore_unused pd_ignore_unused console=tty0 log_buf_len=4M"
+deviceinfo_kernel_cmdline="console=tty0 log_buf_len=4M mem_sleep_default=s2idle deferred_probe_timeout=30 fw_devlink.sync_state=timeout"
 deviceinfo_bootimg_os_version="16.0.0"
 deviceinfo_bootimg_os_patch_level="2026-08"
 deviceinfo_generate_bootimg="true"

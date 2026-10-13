@@ -1,0 +1,25 @@
+#!/bin/sh
+# ModemManager gives up with "sim-missing" when it probes the modem before the
+# USIM application is ready: the card first shows up without a provisioning
+# session ("GW primary session index unknown"), and right after a resume from
+# suspend it is briefly gone ("No card found"). ModemManager does not retry.
+#
+# Wait for the USIM application, then restart ModemManager: always with
+# "force" (after the UIM slot selection, which re-activates the session),
+# otherwise only if it ended up with sim-missing.
+for i in $(seq 120); do
+	qmicli --silent -pd qrtr://0 --uim-get-card-status 2>/dev/null |
+		grep -q "Application state: *'ready'" && break
+	sleep 1
+done
+
+if [ "$1" = force ]; then
+	exec systemctl --no-block try-restart ModemManager.service
+fi
+
+# Let ModemManager finish its own re-probe first
+sleep 30
+if mmcli -m any 2>/dev/null | grep -q "sim-missing"; then
+	systemctl --no-block restart ModemManager.service
+fi
+exit 0

@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=16
+pkgrel=17
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -44,6 +44,8 @@ source="
 	90-senna-wlan-l1ss.rules
 	senna-wlan-l1ss
 	msm-modem-uim-selection-retry.conf
+	senna-modem-sim-recover
+	senna-modem-system-sleep
 	phoc.ini
 	90-audioreach.rules
 	audioreach-blacklist.conf
@@ -77,6 +79,10 @@ package() {
 		"$pkgdir"/usr/libexec/senna-wlan-l1ss
 	install -Dm644 "$srcdir"/msm-modem-uim-selection-retry.conf \
 		"$pkgdir"/usr/lib/systemd/system/msm-modem-uim-selection.service.d/retry.conf
+	install -Dm755 "$srcdir"/senna-modem-sim-recover \
+		"$pkgdir"/usr/libexec/senna-modem-sim-recover
+	install -Dm755 "$srcdir"/senna-modem-system-sleep \
+		"$pkgdir"/usr/lib/systemd/system-sleep/senna-modem
 	install -Dm644 "$srcdir"/phoc.ini "$pkgdir"/etc/phosh/phoc.ini
 
 	# Audio: Qualcomm AudioReach (PAL/AGM/GSL) instead of the upstream
@@ -117,10 +123,12 @@ package() {
 }
 
 sha512sums="
-e37121b14c8b9d43e9aa14f20d5386f0689f5cd22759d086a0d3f14a346b557d454a60ad8035af8dbb0913a92461ed659f74fcfa96fbb2ca7132786ce5c7fe67  deviceinfo
+700d09f18519571f91d8b3c2056eb8426aae67fa4b810252b3f3b72b6949b9b3ac8c3ade3b924b39700a565803c9d70340bc665546abd93b3b5e351b9a21a707  deviceinfo
 ebe83921bd566370cc548b2b2b3b158e56e2d1b25cabd793a0ddecb91e703150610599dc249968a17b427337f8b0609adcf46b778df0bfc77ce2eb43cad828e9  modules-initfs
 cc561eb2ff8e5c94e5bc3ef456403ad7aee9a25d1973cdc1bcc6b132129c6c7c7b5c2cc22da75812def7becef72d23366424449ff757b89ff5bc82167f353148  90-senna-gpu-nopm.rules
-f507063eb038ad1e5bd9e3860577c6e1193bb52ffd489b259b2f0595340c78cdb975519516150b915e427a343f86f2871fa47700b8a8a36831b1827485103dc8  msm-modem-uim-selection-retry.conf
+0b34d277cea761fc2bdb6aabde25f4b99fdee51ee43767ae98c672e8702931e103b0d35a0ff09b72f85c9be5c95e96ffd709a47e91b019e8743f656cd9ef9898  msm-modem-uim-selection-retry.conf
+a74666fd72222e21df2abeb7f69c510fd5ebbb8987ef62f81116f9cb18d2df3e982761709c33e8efc1b36e881746a711bd1695e1c2f88430009d992a9348b4d4  senna-modem-sim-recover
+6f628db6abc07d229d659d3bfa29c8b246d75648e3095174d6d7b2a03a38029571ef63480d037157a3a4817033674ae276d2ecfb99a0b244df0a845182c570da  senna-modem-system-sleep
 e378c24d69a352a505bbcf3790999991ef1159370eb3463afd659e1f7e01882236888a3e531695bf35272c128db6dbba431f2d17d7e0bbb5c7e17c8a48cb2f46  phoc.ini
 db5c1c32168bd404c5476fffde6cf30b038f62ec7bcb3579410197ac56ddd4ce8403aec3a54696806fdc48b2b7ac7c47b4a1f98624298569902d32f114128a70  90-audioreach.rules
 5b03fab51869212eecf7397f59b8ce8309a3e48b42ac69314debd96ea9744fb3f78887bbd51c486aebf2f4836a07cff6fcc8a3502c055f6ba4372ea6c2f551d5  audioreach-blacklist.conf
