@@ -1,0 +1,110 @@
+From fd8307f38e2d13359a9644559c9892674178a287 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 13 Oct 2026 21:41:35 +0200
+Subject: [PATCH] pw-pal-plugin: do not call PAL inside log macros
+
+pw_log_info() and friends only evaluate their arguments when that log
+level is enabled, which it is not by default. The voice call card
+passed pal_stream_stop/close(), pal_stream_set_volume(),
+pal_stream_set_param() and pal_stream_set_device() as log arguments,
+so none of them ran:
+
+- the voice session was never stopped or closed when a call ended; it
+  kept the handset device open, PAL then moved every later playback
+  stream on the shared backend to the handset (earpiece amplifier only,
+  no loudspeaker) and refused the next call ("no new session allowed");
+- the call volume and mic mute were never applied, calls played at
+  full volume;
+- speakerphone never switched the output device.
+
+Call PAL first and log the result.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/pw-pal-plugin.c | 25 +++++++++++++++++--------
+ 1 file changed, 17 insertions(+), 8 deletions(-)
+
+diff --git a/src/pw-pal-plugin.c b/src/pw-pal-plugin.c
+index 09618af..270abd6 100644
+--- a/src/pw-pal-plugin.c
++++ b/src/pw-pal-plugin.c
+@@ -2309,6 +2309,7 @@ static void pal_card_voice_apply_volume(struct pal_card *c)
+         uint32_t no_of_volpair;
+         struct pal_channel_vol_kv pair[1];
+     } vol;
++    int rc;
+ 
+     if (!c->voice_handle)
+         return;
+@@ -2316,8 +2317,10 @@ static void pal_card_voice_apply_volume(struct pal_card *c)
+     vol.no_of_volpair = 1;
+     vol.pair[0].channel_mask = 0x1;
+     vol.pair[0].vol = v->mute ? 0.0f : SPA_CLAMP(cbrtf(pal_card_volume_avg(v)), 0.0f, 1.0f);
+-    pw_log_info("voice call: volume %.2f -> %d", vol.pair[0].vol,
+-                pal_stream_set_volume(c->voice_handle, (struct pal_volume_data *)&vol));
++    /* never call PAL inside pw_log_*(): the arguments are only evaluated
++     * when that log level is enabled */
++    rc = pal_stream_set_volume(c->voice_handle, (struct pal_volume_data *)&vol);
++    pw_log_info("voice call: volume %.2f -> %d", vol.pair[0].vol, rc);
+ }
+ 
+ static void pal_card_voice_apply_mic_mute(struct pal_card *c)
+@@ -2326,6 +2329,7 @@ static void pal_card_voice_apply_mic_mute(struct pal_card *c)
+         pal_param_payload hdr;
+         pal_device_mute_t mute;
+     } p;
++    int rc;
+ 
+     if (!c->voice_handle)
+         return;
+@@ -2333,8 +2337,8 @@ static void pal_card_voice_apply_mic_mute(struct pal_card *c)
+     p.hdr.payload_size = sizeof(p.mute);
+     p.mute.dir = PAL_AUDIO_INPUT;
+     p.mute.mute = c->vol[PAL_CARD_PROFILE_VOICE][PAL_CARD_DEV_SOURCE].mute;
+-    pw_log_info("voice call: mic %s -> %d", p.mute.mute ? "mute" : "unmute",
+-                pal_stream_set_param(c->voice_handle, PAL_PARAM_ID_DEVICE_MUTE, &p.hdr));
++    rc = pal_stream_set_param(c->voice_handle, PAL_PARAM_ID_DEVICE_MUTE, &p.hdr);
++    pw_log_info("voice call: mic %s -> %d", p.mute.mute ? "mute" : "unmute", rc);
+ }
+ 
+ static int pal_card_voice_start(struct pal_card *c)
+@@ -2385,10 +2389,14 @@ static int pal_card_voice_start(struct pal_card *c)
+ 
+ static void pal_card_voice_stop(struct pal_card *c)
+ {
++    int rc;
++
+     if (!c->voice_handle)
+         return;
+-    pw_log_info("voice call: stop %d", pal_stream_stop(c->voice_handle));
+-    pw_log_info("voice call: close %d", pal_stream_close(c->voice_handle));
++    rc = pal_stream_stop(c->voice_handle);
++    pw_log_info("voice call: stop %d", rc);
++    rc = pal_stream_close(c->voice_handle);
++    pw_log_info("voice call: close %d", rc);
+     c->voice_handle = NULL;
+ }
+ 
+@@ -2473,6 +2481,7 @@ static void pal_card_set_sink_route(struct pal_card *c, uint32_t route)
+ {
+     struct pal_device dev[2];
+     pal_device_id_t rx;
++    int rc;
+ 
+     c->sink_route = route;
+     if (!c->voice_handle)
+@@ -2482,9 +2491,9 @@ static void pal_card_set_sink_route(struct pal_card *c, uint32_t route)
+     if (rx == c->voice_rx)
+         return;
+     pal_card_voice_fill_devices(dev, rx);
++    rc = pal_stream_set_device(c->voice_handle, 2, dev);
+     pw_log_info("voice call: output -> %s: %d",
+-                rx == PAL_DEVICE_OUT_SPEAKER ? "speaker" : "earpiece",
+-                pal_stream_set_device(c->voice_handle, 2, dev));
++                rx == PAL_DEVICE_OUT_SPEAKER ? "speaker" : "earpiece", rc);
+     c->voice_rx = rx;
+     pal_card_voice_apply_volume(c);
+ }
+-- 
+2.55.0
+
