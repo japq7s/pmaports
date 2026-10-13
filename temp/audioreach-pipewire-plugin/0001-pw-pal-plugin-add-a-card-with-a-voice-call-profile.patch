@@ -1,0 +1,1074 @@
+From e5067311c47efd193d28cdf30d3f02c74bab33fa Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 13 Oct 2026 14:39:16 +0200
+Subject: [PATCH] pw-pal-plugin: add a card with a voice call profile
+
+Phones drive call audio with callaudiod, which talks PulseAudio: it looks
+for a card with a speaker and an earpiece port, switches it to a
+"Voice Call" profile and back to "HiFi", toggles speakerphone by sink
+port and mutes the call with the source mute. pipewire-pulse only makes
+cards out of PipeWire devices, and the plugin creates bare nodes.
+
+Add an Audio/Device implemented in the module ("pal.card = true") and let
+the sink and source modules attach to it ("pal.card.device = 0|1", which
+sets device.id and card.profile.device on their nodes):
+
+- profiles "HiFi" and "Voice Call"; "Voice Call" pauses the attached
+  nodes, which closes their PAL streams (the voice session needs the same
+  backends), then opens a hostless PAL_STREAM_VOICE_CALL session (VSID
+  VOICEMMODE1, RX handset or speaker, TX handset mic);
+- routes "speaker" and "earpiece" for the sink, "handset-mic" for the
+  source, in both profiles so that switching profiles never looks like a
+  port being plugged in (callaudiod would then pick the speaker);
+- route volume and mute: the PCM node volumes with "HiFi", the voice RX
+  volume and the TX mute during a call; kept per profile in
+  $XDG_STATE_HOME/pipewire/pal-card.state.
+
+The profiles carry no node classes, so WirePlumber neither selects routes
+on profile changes nor restores "Voice Call" at boot.
+
+Also:
+- pal_source_handset_mic node name (PAL_DEVICE_IN_HANDSET_MIC);
+- open mono capture devices in mono instead of always stereo;
+- pal.buffer.duration-ms to override the PAL buffer size;
+- capture produces silence instead of touching the ring buffer while no
+  PAL stream is open;
+- jack_fd starts at -1: modules without a jack closed fd 0 on unload.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/pw-pal-plugin.c | 926 +++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 924 insertions(+), 2 deletions(-)
+
+diff --git a/src/pw-pal-plugin.c b/src/pw-pal-plugin.c
+index 6358091..09618af 100644
+--- a/src/pw-pal-plugin.c
++++ b/src/pw-pal-plugin.c
+@@ -29,6 +29,12 @@
+ #include <spa/param/audio/format-utils.h>
+ #include <spa/param/audio/raw.h>
+ #include <spa/param/buffers.h>
++#include <spa/param/profile.h>
++#include <spa/param/route.h>
++#include <spa/param/props.h>
++#include <spa/pod/filter.h>
++#include <spa/monitor/device.h>
++#include <spa/monitor/utils.h>
+ #include <pipewire/impl.h>
+ #include <pipewire/i18n.h>
+ #include <PalApi.h>
+@@ -172,10 +178,21 @@ struct pw_userdata {
+     struct spa_hook_list hooks;
+     struct spa_interface node_iface;
+     uint32_t props_serial;
+-    struct pw_impl_metadata *sva_metadata;   
+-    uint32_t sva_node_id;                    
++    struct pw_impl_metadata *sva_metadata;
++    uint32_t sva_node_id;
++
++    /* AudioReach card (pal.card = true): this instance owns the device */
++    bool is_card;
++    /* node attached to the card (pal.card.device), -1 if none */
++    int card_dev;
++    /* PAL buffer duration override (pal.buffer.duration-ms), 0 = default */
++    uint32_t buffer_ms;
+ };
+ 
++static void pal_card_node_paused(struct pw_userdata *udata);
++static void pal_card_node_ready(struct pw_userdata *udata);
++static bool pal_card_blocks_pcm(struct pw_userdata *udata);
++
+ static void sva_set_state(struct pw_userdata *udata, enum sva_state next_state);
+ static void sva_emit_props_changed(struct pw_userdata *udata);
+ static void pw_pal_set_volume(struct pw_userdata *udata, float gain);
+@@ -1146,6 +1163,12 @@ static void pw_pal_stream_start(struct pw_userdata *udata)
+     int rc = 0;
+     pal_buffer_config_t out_buf_cfg, in_buf_cfg;
+ 
++    /* a voice call holds the same backends */
++    if (pal_card_blocks_pcm(udata)) {
++        pw_log_info("voice call active, not opening the PCM stream");
++        return;
++    }
++
+     rc = pal_stream_open(udata->stream_attributes, udata->no_of_devices, udata->pal_device,
+          0, NULL, pa_pal_out_cb, (uint64_t)udata, &udata->stream_handle);
+ 
+@@ -1241,10 +1264,13 @@ static void pw_pal_change_stream_state(void *d, enum pw_stream_state old,
+     case PW_STREAM_STATE_PAUSED:
+         if (!udata->is_sva) {
+             close_pal_stream(udata);
++            pal_card_node_ready(udata);
++            pal_card_node_paused(udata);
+         }
+         break;
+     case PW_STREAM_STATE_STREAMING:
+         if (!udata->is_sva) {
++            pal_card_node_ready(udata);
+             pw_pal_stream_start(udata);
+         }
+         break;
+@@ -1297,6 +1323,17 @@ static void pw_pal_process_stream(void *d)
+ 
+         data = bd->data;
+ 
++        /* PCM stream closed (voice call or open failure): silence */
++        if (!udata->reader_running) {
++            memset(data, 0, quantum_size);
++            bd->chunk->size   = quantum_size;
++            bd->chunk->stride = udata->frame_size;
++            bd->chunk->offset = 0;
++            buf->size = quantum_size / udata->frame_size;
++            pw_stream_queue_buffer(udata->stream, buf);
++            return;
++        }
++
+         /* Copy from ring buffer filled by the reader thread (non-blocking) */
+         pthread_mutex_lock(&udata->ring_mutex);
+         avail = (udata->ring_write - udata->ring_read) & (udata->ring_size - 1);
+@@ -1557,8 +1594,13 @@ static const struct pw_proxy_events pw_pal_proxy_events_core = {
+     .destroy = pw_pal_core_destroy,
+ };
+ 
++static void pal_card_detach(struct pw_userdata *udata);
++static void pal_card_destroy_owned(struct pw_userdata *udata);
++
+ static void pw_pal_userdata_destroy(struct pw_userdata *udata)
+ {
++    pal_card_destroy_owned(udata);
++    pal_card_detach(udata);
+     close_pal_stream(udata);
+     if (udata->sva_cfg.model_data) {
+         free(udata->sva_cfg.model_data);
+@@ -1709,6 +1751,11 @@ static size_t pw_stream_get_buffer_size(struct pw_userdata *udata, struct pal_me
+ {
+         uint32_t buffer_duration = PW_DEFAULT_BUFFER_DURATION_MS;
+         size_t length = 0, frames = 0;
++        if (udata->buffer_ms > 0) {
++            frames = spec.sample_rate * udata->buffer_ms;
++            length = ((frames * udata->frame_size) / 1000);
++            return (length/udata->frame_size) * udata->frame_size;
++        }
+         switch (type) {
+         case PAL_STREAM_DEEP_BUFFER:
+             buffer_duration = PW_DEEP_BUFFER_BUFFER_DURATION_MS;
+@@ -1806,6 +1853,9 @@ static void pw_pal_fill_stream_info(struct pw_userdata *udata)
+             udata->pal_device[i].config.ch_info.ch_map[0] = PAL_CHMAP_CHANNEL_FL;
+             udata->pal_device[i].config.ch_info.ch_map[1] = PAL_CHMAP_CHANNEL_FR;
+             udata->pal_device[i].config.aud_fmt_id = PAL_AUDIO_FMT_PCM_S16_LE;
++            /* capture device in the stream's channel count (mono mics) */
++            if (!udata->isplayback && udata->info.channels == 1)
++                udata->pal_device[i].config.ch_info.channels = 1;
+         } else {
+             udata->pal_device[i].config.sample_rate = PW_DEFAULT_SAMPLE_RATE;
+             udata->pal_device[i].config.bit_width = SVA_BIT_WIDTH;
+@@ -2023,6 +2073,858 @@ exit:
+ }
+ 
+ 
++/* ═══════════════════════════════════════════════════════════════
++ * AudioReach card
++ *
++ * One Audio/Device ("pal.card = true") that the sink and source nodes
++ * attach to ("pal.card.device = 0|1"). pipewire-pulse turns it into a
++ * PulseAudio card, which is what callaudiod drives calls with:
++ *
++ *  - profiles "HiFi" and "Voice Call": "Voice Call" closes the PCM
++ *    streams (the voice session needs the same backends) and opens a
++ *    hostless PAL_STREAM_VOICE_CALL session;
++ *  - sink routes "speaker" and "earpiece" (speakerphone toggle), source
++ *    route "handset-mic";
++ *  - route volume/mute: PCM node volumes with "HiFi", the voice RX volume
++ *    and the TX mute with "Voice Call". Kept per profile in
++ *    $XDG_STATE_HOME/pipewire/pal-card.state.
++ *
++ * Profiles carry no node classes on purpose: WirePlumber then leaves
++ * profile and route selection to the card (it would pick the speaker for
++ * calls and restore "Voice Call" at boot otherwise).
++ * ═══════════════════════════════════════════════════════════════ */
++
++#define PAL_CARD_DEV_SINK       0
++#define PAL_CARD_DEV_SOURCE     1
++#define PAL_CARD_N_DEVS         2
++
++#define PAL_CARD_PROFILE_HIFI   0
++#define PAL_CARD_PROFILE_VOICE  1
++#define PAL_CARD_N_PROFILES     2
++
++#define PAL_CARD_ROUTE_SPEAKER  0
++#define PAL_CARD_ROUTE_EARPIECE 1
++#define PAL_CARD_ROUTE_MIC      2
++#define PAL_CARD_N_ROUTES       3
++
++#define PAL_CARD_IDX_EnumProfile 0
++#define PAL_CARD_IDX_Profile     1
++#define PAL_CARD_IDX_EnumRoute   2
++#define PAL_CARD_IDX_Route       3
++#define PAL_CARD_N_PARAMS        4
++
++struct pal_card_route_info {
++    const char *name;
++    const char *description;
++    const char *port_type;
++    enum spa_direction direction;
++    uint32_t device;
++    uint32_t priority;
++    uint32_t profiles;      /* bit mask of profile indexes */
++};
++
++static const struct pal_card_route_info pal_card_routes[PAL_CARD_N_ROUTES] = {
++    [PAL_CARD_ROUTE_SPEAKER] = { "speaker", "Speaker", "speaker",
++        SPA_DIRECTION_OUTPUT, PAL_CARD_DEV_SINK, 200, 0x3 },
++    /* in both profiles: callaudiod treats a port that appears with the
++     * call profile as newly plugged and moves the call to the speaker.
++     * With "HiFi" the PCM sink always plays on the speaker. */
++    [PAL_CARD_ROUTE_EARPIECE] = { "earpiece", "Earpiece", "earpiece",
++        SPA_DIRECTION_OUTPUT, PAL_CARD_DEV_SINK, 100, 0x3 },
++    [PAL_CARD_ROUTE_MIC] = { "handset-mic", "Microphone", "mic",
++        SPA_DIRECTION_INPUT, PAL_CARD_DEV_SOURCE, 100, 0x3 },
++};
++
++/* callaudiod matches the names by prefix */
++static const char * const pal_card_profile_names[PAL_CARD_N_PROFILES] = { "HiFi", "Voice Call" };
++static const char * const pal_card_profile_desc[PAL_CARD_N_PROFILES] = { "Default", "Voice call" };
++static const uint32_t pal_card_profile_prio[PAL_CARD_N_PROFILES] = { 500, 100 };
++
++struct pal_card_volume {
++    uint32_t n_channels;
++    float volumes[SPA_AUDIO_MAX_CHANNELS];
++    bool mute;
++};
++
++struct pal_card {
++    struct pw_context *context;
++    struct pw_impl_device *device;
++    struct spa_device spa_device;
++    struct spa_hook_list hooks;
++    struct spa_device_info info;
++    uint64_t info_all;
++    struct spa_param_info params[PAL_CARD_N_PARAMS];
++    struct pw_properties *props;
++
++    uint32_t profile;
++    uint32_t sink_route;
++    struct pal_card_volume vol[PAL_CARD_N_PROFILES][PAL_CARD_N_DEVS];
++
++    struct pw_userdata *node[PAL_CARD_N_DEVS];
++
++    pal_stream_handle_t *voice_handle;
++    pal_device_id_t voice_rx;
++    bool voice_pending;
++    bool voice_active;
++
++    char state_file[PATH_MAX];
++};
++
++/* one card per process; all access is from the main loop */
++static struct pal_card *g_card;
++
++static uint32_t pal_card_active_route(struct pal_card *c, uint32_t dev)
++{
++    if (dev == PAL_CARD_DEV_SOURCE)
++        return PAL_CARD_ROUTE_MIC;
++    return c->profile == PAL_CARD_PROFILE_VOICE ? c->sink_route : PAL_CARD_ROUTE_SPEAKER;
++}
++
++static float pal_card_volume_avg(const struct pal_card_volume *v)
++{
++    float sum = 0.0f;
++    uint32_t i;
++
++    if (v->n_channels == 0)
++        return 0.0f;
++    for (i = 0; i < v->n_channels; i++)
++        sum += v->volumes[i];
++    return sum / v->n_channels;
++}
++
++static void pal_card_volume_set_all(struct pal_card_volume *v, float lin)
++{
++    uint32_t i;
++
++    for (i = 0; i < v->n_channels; i++)
++        v->volumes[i] = lin;
++}
++
++static void pal_card_load_state(struct pal_card *c)
++{
++    FILE *f;
++    unsigned int p, d;
++    float lin;
++    int mute;
++
++    if (c->state_file[0] == '\0' || (f = fopen(c->state_file, "r")) == NULL)
++        return;
++    while (fscanf(f, "%u %u %f %d", &p, &d, &lin, &mute) == 4) {
++        if (p >= PAL_CARD_N_PROFILES || d >= PAL_CARD_N_DEVS ||
++            !(lin >= 0.0f && lin <= 10.0f))
++            continue;
++        pal_card_volume_set_all(&c->vol[p][d], lin);
++        /* a muted mic must not survive a restart unnoticed */
++        c->vol[p][d].mute = d == PAL_CARD_DEV_SINK && mute;
++    }
++    fclose(f);
++}
++
++static void pal_card_save_state(struct pal_card *c)
++{
++    char tmp[PATH_MAX + 4];
++    FILE *f;
++    uint32_t p, d;
++
++    if (c->state_file[0] == '\0')
++        return;
++    /* the file sits in $XDG_STATE_HOME/pipewire, create that level */
++    snprintf(tmp, sizeof(tmp), "%s", c->state_file);
++    if (strrchr(tmp, '/')) {
++        *strrchr(tmp, '/') = '\0';
++        mkdir(tmp, 0700);
++    }
++    snprintf(tmp, sizeof(tmp), "%s.new", c->state_file);
++    if ((f = fopen(tmp, "w")) == NULL)
++        return;
++    for (p = 0; p < PAL_CARD_N_PROFILES; p++)
++        for (d = 0; d < PAL_CARD_N_DEVS; d++)
++            fprintf(f, "%u %u %f %d\n", p, d,
++                    pal_card_volume_avg(&c->vol[p][d]), c->vol[p][d].mute);
++    if (fclose(f) == 0)
++        rename(tmp, c->state_file);
++}
++
++static void pal_card_emit_info(struct pal_card *c, bool full)
++{
++    uint64_t old = full ? c->info.change_mask : 0;
++
++    if (full)
++        c->info.change_mask = c->info_all;
++    if (c->info.change_mask) {
++        c->info.props = &c->props->dict;
++        if (c->info.change_mask & SPA_DEVICE_CHANGE_MASK_PARAMS) {
++            SPA_FOR_EACH_ELEMENT_VAR(c->params, p) {
++                if (p->user > 0) {
++                    p->flags ^= SPA_PARAM_INFO_SERIAL;
++                    p->user = 0;
++                }
++            }
++        }
++        spa_device_emit_info(&c->hooks, &c->info);
++        c->info.change_mask = old;
++    }
++}
++
++static void pal_card_params_changed(struct pal_card *c, bool profile, bool routes)
++{
++    if (profile) {
++        c->params[PAL_CARD_IDX_Profile].user++;
++        c->params[PAL_CARD_IDX_EnumRoute].user++;
++    }
++    if (profile || routes)
++        c->params[PAL_CARD_IDX_Route].user++;
++    c->info.change_mask |= SPA_DEVICE_CHANGE_MASK_PARAMS;
++    pal_card_emit_info(c, false);
++}
++
++/* ── voice call session ─────────────────────────────────────── */
++
++static pal_device_id_t pal_card_voice_rx(struct pal_card *c)
++{
++    return c->sink_route == PAL_CARD_ROUTE_SPEAKER ?
++        PAL_DEVICE_OUT_SPEAKER : PAL_DEVICE_OUT_HANDSET;
++}
++
++static void pal_card_voice_fill_devices(struct pal_device *dev, pal_device_id_t rx)
++{
++    memset(dev, 0, 2 * sizeof(*dev));
++    dev[0].id = rx;
++    dev[0].config.sample_rate = 48000;
++    dev[0].config.bit_width = 16;
++    dev[0].config.ch_info.channels = 2;
++    dev[0].config.ch_info.ch_map[0] = PAL_CHMAP_CHANNEL_FL;
++    dev[0].config.ch_info.ch_map[1] = PAL_CHMAP_CHANNEL_FR;
++    dev[0].config.aud_fmt_id = PAL_AUDIO_FMT_PCM_S16_LE;
++    dev[1] = dev[0];
++    /* TODO: speaker mic for speakerphone once its mixer path is verified */
++    dev[1].id = PAL_DEVICE_IN_HANDSET_MIC;
++    dev[1].config.ch_info.channels = 1;
++}
++
++static void pal_card_voice_apply_volume(struct pal_card *c)
++{
++    const struct pal_card_volume *v = &c->vol[PAL_CARD_PROFILE_VOICE][PAL_CARD_DEV_SINK];
++    struct {
++        uint32_t no_of_volpair;
++        struct pal_channel_vol_kv pair[1];
++    } vol;
++
++    if (!c->voice_handle)
++        return;
++    /* route volumes are linear, PAL takes the 0..1 step position */
++    vol.no_of_volpair = 1;
++    vol.pair[0].channel_mask = 0x1;
++    vol.pair[0].vol = v->mute ? 0.0f : SPA_CLAMP(cbrtf(pal_card_volume_avg(v)), 0.0f, 1.0f);
++    pw_log_info("voice call: volume %.2f -> %d", vol.pair[0].vol,
++                pal_stream_set_volume(c->voice_handle, (struct pal_volume_data *)&vol));
++}
++
++static void pal_card_voice_apply_mic_mute(struct pal_card *c)
++{
++    struct {
++        pal_param_payload hdr;
++        pal_device_mute_t mute;
++    } p;
++
++    if (!c->voice_handle)
++        return;
++    memset(&p, 0, sizeof(p));
++    p.hdr.payload_size = sizeof(p.mute);
++    p.mute.dir = PAL_AUDIO_INPUT;
++    p.mute.mute = c->vol[PAL_CARD_PROFILE_VOICE][PAL_CARD_DEV_SOURCE].mute;
++    pw_log_info("voice call: mic %s -> %d", p.mute.mute ? "mute" : "unmute",
++                pal_stream_set_param(c->voice_handle, PAL_PARAM_ID_DEVICE_MUTE, &p.hdr));
++}
++
++static int pal_card_voice_start(struct pal_card *c)
++{
++    struct pal_stream_attributes a;
++    struct pal_device dev[2];
++    int rc;
++
++    if (c->voice_handle)
++        return 0;
++
++    memset(&a, 0, sizeof(a));
++    a.type = PAL_STREAM_VOICE_CALL;
++    a.direction = PAL_AUDIO_INPUT_OUTPUT;
++    a.info.voice_call_info.VSID = VOICEMMODE1;
++    a.info.voice_call_info.tty_mode = PAL_TTY_OFF;
++    a.in_media_config.sample_rate = 48000;
++    a.in_media_config.bit_width = 16;
++    a.in_media_config.ch_info.channels = 1;
++    a.in_media_config.ch_info.ch_map[0] = PAL_CHMAP_CHANNEL_FL;
++    a.in_media_config.aud_fmt_id = PAL_AUDIO_FMT_PCM_S16_LE;
++    a.out_media_config = a.in_media_config;
++
++    c->voice_rx = pal_card_voice_rx(c);
++    pal_card_voice_fill_devices(dev, c->voice_rx);
++
++    rc = pal_stream_open(&a, 2, dev, 0, NULL, NULL, 0, &c->voice_handle);
++    pw_log_info("voice call: open %d", rc);
++    if (rc) {
++        c->voice_handle = NULL;
++        return rc;
++    }
++
++    /* volume before start is cached by PAL and applied with the graph */
++    pal_card_voice_apply_volume(c);
++    rc = pal_stream_start(c->voice_handle);
++    pw_log_info("voice call: start %d", rc);
++    if (rc) {
++        pal_stream_close(c->voice_handle);
++        c->voice_handle = NULL;
++        return rc;
++    }
++    pal_card_voice_apply_volume(c);
++    if (c->vol[PAL_CARD_PROFILE_VOICE][PAL_CARD_DEV_SOURCE].mute)
++        pal_card_voice_apply_mic_mute(c);
++    return 0;
++}
++
++static void pal_card_voice_stop(struct pal_card *c)
++{
++    if (!c->voice_handle)
++        return;
++    pw_log_info("voice call: stop %d", pal_stream_stop(c->voice_handle));
++    pw_log_info("voice call: close %d", pal_stream_close(c->voice_handle));
++    c->voice_handle = NULL;
++}
++
++/* ── PCM nodes ──────────────────────────────────────────────── */
++
++static void pal_card_apply_node_volume(struct pal_card *c, uint32_t dev)
++{
++    struct pal_card_volume *v = &c->vol[PAL_CARD_PROFILE_HIFI][dev];
++    struct pw_userdata *n = c->node[dev];
++    float mute = v->mute ? 1.0f : 0.0f;
++
++    if (n == NULL || n->stream == NULL)
++        return;
++    pw_stream_set_control(n->stream,
++            SPA_PROP_channelVolumes, v->n_channels, v->volumes,
++            SPA_PROP_mute, 1, &mute,
++            0);
++}
++
++static void pal_card_set_nodes_active(struct pal_card *c, bool active)
++{
++    uint32_t d;
++
++    for (d = 0; d < PAL_CARD_N_DEVS; d++)
++        if (c->node[d] && c->node[d]->stream)
++            pw_stream_set_active(c->node[d]->stream, active);
++}
++
++static void pal_card_set_profile(struct pal_card *c, uint32_t profile);
++
++/* open the voice session once no PCM stream holds a backend any more */
++static void pal_card_try_voice_start(struct pal_card *c)
++{
++    uint32_t d;
++
++    if (!c->voice_pending)
++        return;
++    for (d = 0; d < PAL_CARD_N_DEVS; d++)
++        if (c->node[d] && c->node[d]->stream_handle)
++            return;
++
++    c->voice_pending = false;
++    if (pal_card_voice_start(c) != 0) {
++        pw_log_error("voice call: could not start the voice session");
++        pal_card_set_profile(c, PAL_CARD_PROFILE_HIFI);
++    }
++}
++
++static void pal_card_set_profile(struct pal_card *c, uint32_t profile)
++{
++    if (profile == c->profile)
++        return;
++
++    pw_log_info("profile -> %s", pal_card_profile_names[profile]);
++
++    if (profile == PAL_CARD_PROFILE_VOICE) {
++        /* calls start on the earpiece, callaudiod switches the route to
++         * the speaker for speakerphone */
++        c->profile = PAL_CARD_PROFILE_VOICE;
++        c->sink_route = PAL_CARD_ROUTE_EARPIECE;
++        c->voice_active = true;
++        c->voice_pending = true;
++        /* pausing the nodes closes their PAL streams, like Android does */
++        pal_card_set_nodes_active(c, false);
++        pal_card_params_changed(c, true, true);
++        pal_card_try_voice_start(c);
++        return;
++    }
++
++    pal_card_voice_stop(c);
++    c->voice_pending = false;
++    c->voice_active = false;
++    c->profile = PAL_CARD_PROFILE_HIFI;
++    c->sink_route = PAL_CARD_ROUTE_SPEAKER;
++    pal_card_apply_node_volume(c, PAL_CARD_DEV_SINK);
++    pal_card_apply_node_volume(c, PAL_CARD_DEV_SOURCE);
++    pal_card_set_nodes_active(c, true);
++    pal_card_params_changed(c, true, true);
++}
++
++static void pal_card_set_sink_route(struct pal_card *c, uint32_t route)
++{
++    struct pal_device dev[2];
++    pal_device_id_t rx;
++
++    c->sink_route = route;
++    if (!c->voice_handle)
++        return;
++
++    rx = pal_card_voice_rx(c);
++    if (rx == c->voice_rx)
++        return;
++    pal_card_voice_fill_devices(dev, rx);
++    pw_log_info("voice call: output -> %s: %d",
++                rx == PAL_DEVICE_OUT_SPEAKER ? "speaker" : "earpiece",
++                pal_stream_set_device(c->voice_handle, 2, dev));
++    c->voice_rx = rx;
++    pal_card_voice_apply_volume(c);
++}
++
++static void pal_card_set_route_props(struct pal_card *c, uint32_t dev,
++                                     const struct spa_pod *props)
++{
++    struct pal_card_volume *v = &c->vol[c->profile][dev];
++    const struct spa_pod_object *obj = (const struct spa_pod_object *)props;
++    struct spa_pod_prop *prop;
++    float vols[SPA_AUDIO_MAX_CHANNELS];
++    uint32_t n, i;
++    bool b;
++
++    if (!spa_pod_is_object_type(props, SPA_TYPE_OBJECT_Props))
++        return;
++
++    SPA_POD_OBJECT_FOREACH(obj, prop) {
++        switch (prop->key) {
++        case SPA_PROP_mute:
++            if (spa_pod_get_bool(&prop->value, &b) == 0)
++                v->mute = b;
++            break;
++        case SPA_PROP_channelVolumes:
++            n = spa_pod_copy_array(&prop->value, SPA_TYPE_Float,
++                                   vols, SPA_AUDIO_MAX_CHANNELS);
++            if (n == 0)
++                break;
++            for (i = 0; i < v->n_channels; i++)
++                v->volumes[i] = vols[SPA_MIN(i, n - 1)];
++            break;
++        default:
++            break;
++        }
++    }
++
++    if (c->profile == PAL_CARD_PROFILE_VOICE) {
++        if (dev == PAL_CARD_DEV_SINK)
++            pal_card_voice_apply_volume(c);
++        else
++            pal_card_voice_apply_mic_mute(c);
++    } else {
++        pal_card_apply_node_volume(c, dev);
++    }
++    pal_card_save_state(c);
++}
++
++/* ── spa_device implementation ──────────────────────────────── */
++
++static struct spa_pod *pal_card_build_profile(struct spa_pod_builder *b, uint32_t id,
++                                              uint32_t index)
++{
++    struct spa_pod_frame f[1];
++
++    spa_pod_builder_push_object(b, &f[0], SPA_TYPE_OBJECT_ParamProfile, id);
++    spa_pod_builder_add(b,
++        SPA_PARAM_PROFILE_index, SPA_POD_Int(index),
++        SPA_PARAM_PROFILE_name, SPA_POD_String(pal_card_profile_names[index]),
++        SPA_PARAM_PROFILE_description, SPA_POD_String(pal_card_profile_desc[index]),
++        SPA_PARAM_PROFILE_priority, SPA_POD_Int(pal_card_profile_prio[index]),
++        SPA_PARAM_PROFILE_available, SPA_POD_Id(SPA_PARAM_AVAILABILITY_yes),
++        0);
++    /* never ask WirePlumber to store a profile, see the comment above */
++    if (id == SPA_PARAM_Profile)
++        spa_pod_builder_add(b, SPA_PARAM_PROFILE_save, SPA_POD_Bool(false), 0);
++    return spa_pod_builder_pop(b, &f[0]);
++}
++
++static struct spa_pod *pal_card_build_route(struct pal_card *c, struct spa_pod_builder *b,
++                                            uint32_t id, uint32_t index)
++{
++    const struct pal_card_route_info *ri = &pal_card_routes[index];
++    struct spa_pod_frame f[2];
++    uint32_t p;
++
++    spa_pod_builder_push_object(b, &f[0], SPA_TYPE_OBJECT_ParamRoute, id);
++    spa_pod_builder_add(b,
++        SPA_PARAM_ROUTE_index, SPA_POD_Int(index),
++        SPA_PARAM_ROUTE_direction, SPA_POD_Id(ri->direction),
++        SPA_PARAM_ROUTE_name, SPA_POD_String(ri->name),
++        SPA_PARAM_ROUTE_description, SPA_POD_String(ri->description),
++        SPA_PARAM_ROUTE_priority, SPA_POD_Int(ri->priority),
++        SPA_PARAM_ROUTE_available, SPA_POD_Id(SPA_PARAM_AVAILABILITY_yes),
++        0);
++
++    spa_pod_builder_prop(b, SPA_PARAM_ROUTE_info, SPA_POD_PROP_FLAG_HINT_DICT);
++    spa_pod_builder_push_struct(b, &f[1]);
++    spa_pod_builder_int(b, 1);
++    spa_pod_builder_add(b,
++        SPA_POD_String("port.type"), SPA_POD_String(ri->port_type), NULL);
++    spa_pod_builder_pop(b, &f[1]);
++
++    spa_pod_builder_prop(b, SPA_PARAM_ROUTE_profiles, 0);
++    spa_pod_builder_push_array(b, &f[1]);
++    for (p = 0; p < PAL_CARD_N_PROFILES; p++)
++        if (ri->profiles & (1u << p))
++            spa_pod_builder_int(b, p);
++    spa_pod_builder_pop(b, &f[1]);
++
++    if (id == SPA_PARAM_Route) {
++        const struct pal_card_volume *v = &c->vol[c->profile][ri->device];
++
++        spa_pod_builder_prop(b, SPA_PARAM_ROUTE_device, 0);
++        spa_pod_builder_int(b, ri->device);
++
++        spa_pod_builder_prop(b, SPA_PARAM_ROUTE_props, 0);
++        spa_pod_builder_push_object(b, &f[1], SPA_TYPE_OBJECT_Props, id);
++        spa_pod_builder_prop(b, SPA_PROP_mute, 0);
++        spa_pod_builder_bool(b, v->mute);
++        spa_pod_builder_prop(b, SPA_PROP_channelVolumes, 0);
++        spa_pod_builder_array(b, sizeof(float), SPA_TYPE_Float,
++                              v->n_channels, v->volumes);
++        spa_pod_builder_prop(b, SPA_PROP_volumeBase, SPA_POD_PROP_FLAG_READONLY);
++        spa_pod_builder_float(b, 1.0f);
++        spa_pod_builder_prop(b, SPA_PROP_volumeStep, SPA_POD_PROP_FLAG_READONLY);
++        spa_pod_builder_float(b, 1.0f / 65536.0f);
++        spa_pod_builder_pop(b, &f[1]);
++
++        spa_pod_builder_prop(b, SPA_PARAM_ROUTE_save, 0);
++        spa_pod_builder_bool(b, false);
++    }
++
++    spa_pod_builder_prop(b, SPA_PARAM_ROUTE_devices, 0);
++    spa_pod_builder_push_array(b, &f[1]);
++    spa_pod_builder_int(b, ri->device);
++    spa_pod_builder_pop(b, &f[1]);
++
++    return spa_pod_builder_pop(b, &f[0]);
++}
++
++static int pal_card_add_listener(void *object, struct spa_hook *listener,
++                                 const struct spa_device_events *events, void *data)
++{
++    struct pal_card *c = object;
++    struct spa_hook_list save;
++
++    spa_hook_list_isolate(&c->hooks, &save, listener, events, data);
++    if (events->info)
++        pal_card_emit_info(c, true);
++    spa_hook_list_join(&c->hooks, &save);
++    return 0;
++}
++
++static int pal_card_sync(void *object, int seq)
++{
++    struct pal_card *c = object;
++
++    spa_device_emit_result(&c->hooks, seq, 0, 0, NULL);
++    return 0;
++}
++
++static int pal_card_enum_params(void *object, int seq, uint32_t id, uint32_t start,
++                                uint32_t num, const struct spa_pod *filter)
++{
++    struct pal_card *c = object;
++    struct spa_result_device_params result;
++    struct spa_pod_builder b = { 0 };
++    struct spa_pod *param;
++    uint8_t buffer[2048];
++    uint32_t count = 0;
++
++    if (num == 0)
++        return -EINVAL;
++
++    result.id = id;
++    result.next = start;
++next:
++    result.index = result.next++;
++    spa_pod_builder_init(&b, buffer, sizeof(buffer));
++
++    switch (id) {
++    case SPA_PARAM_EnumProfile:
++        if (result.index >= PAL_CARD_N_PROFILES)
++            return 0;
++        param = pal_card_build_profile(&b, id, result.index);
++        break;
++    case SPA_PARAM_Profile:
++        if (result.index > 0)
++            return 0;
++        param = pal_card_build_profile(&b, id, c->profile);
++        break;
++    case SPA_PARAM_EnumRoute:
++        if (result.index >= PAL_CARD_N_ROUTES)
++            return 0;
++        param = pal_card_build_route(c, &b, id, result.index);
++        break;
++    case SPA_PARAM_Route:
++        if (result.index >= PAL_CARD_N_DEVS)
++            return 0;
++        param = pal_card_build_route(c, &b, id, pal_card_active_route(c, result.index));
++        break;
++    default:
++        return -ENOENT;
++    }
++
++    if (spa_pod_filter(&b, &result.param, param, filter) < 0)
++        goto next;
++
++    spa_device_emit_result(&c->hooks, seq, 0, SPA_RESULT_TYPE_DEVICE_PARAMS, &result);
++
++    if (++count != num)
++        goto next;
++    return 0;
++}
++
++static int pal_card_set_param(void *object, uint32_t id, uint32_t flags,
++                              const struct spa_pod *param)
++{
++    struct pal_card *c = object;
++
++    switch (id) {
++    case SPA_PARAM_Profile:
++    {
++        uint32_t idx = SPA_ID_INVALID, i;
++        const char *name = NULL;
++
++        if (param == NULL || spa_pod_parse_object(param,
++                SPA_TYPE_OBJECT_ParamProfile, NULL,
++                SPA_PARAM_PROFILE_index, SPA_POD_OPT_Int(&idx),
++                SPA_PARAM_PROFILE_name, SPA_POD_OPT_String(&name)) < 0)
++            return -EINVAL;
++        if (idx == SPA_ID_INVALID && name != NULL) {
++            for (i = 0; i < PAL_CARD_N_PROFILES; i++)
++                if (spa_streq(name, pal_card_profile_names[i]))
++                    idx = i;
++        }
++        if (idx >= PAL_CARD_N_PROFILES)
++            return -EINVAL;
++        pal_card_set_profile(c, idx);
++        return 0;
++    }
++    case SPA_PARAM_Route:
++    {
++        uint32_t idx = SPA_ID_INVALID, dev = SPA_ID_INVALID;
++        struct spa_pod *props = NULL;
++        const struct pal_card_route_info *ri;
++
++        if (param == NULL || spa_pod_parse_object(param,
++                SPA_TYPE_OBJECT_ParamRoute, NULL,
++                SPA_PARAM_ROUTE_index, SPA_POD_OPT_Int(&idx),
++                SPA_PARAM_ROUTE_device, SPA_POD_OPT_Int(&dev),
++                SPA_PARAM_ROUTE_props, SPA_POD_OPT_Pod(&props)) < 0)
++            return -EINVAL;
++        if (idx >= PAL_CARD_N_ROUTES)
++            return -EINVAL;
++        ri = &pal_card_routes[idx];
++        if ((dev != SPA_ID_INVALID && dev != ri->device) ||
++            !(ri->profiles & (1u << c->profile)))
++            return -EINVAL;
++
++        if (ri->device == PAL_CARD_DEV_SINK && idx != pal_card_active_route(c, ri->device))
++            pal_card_set_sink_route(c, idx);
++        if (props)
++            pal_card_set_route_props(c, ri->device, props);
++        pal_card_params_changed(c, false, true);
++        return 0;
++    }
++    default:
++        return -ENOENT;
++    }
++}
++
++static const struct spa_device_methods pal_card_device_methods = {
++    SPA_VERSION_DEVICE_METHODS,
++    .add_listener = pal_card_add_listener,
++    .sync = pal_card_sync,
++    .enum_params = pal_card_enum_params,
++    .set_param = pal_card_set_param,
++};
++
++static void pal_card_destroy(struct pal_card *c)
++{
++    pal_card_voice_stop(c);
++    if (c->device)
++        pw_impl_device_destroy(c->device);
++    pw_properties_free(c->props);
++    if (g_card == c)
++        g_card = NULL;
++    free(c);
++}
++
++static int pal_card_create(struct pw_userdata *udata, struct pw_properties *args)
++{
++    struct pal_card *c;
++    const char *str;
++    float voice_volume = 0.3f;
++    uint32_t p, d;
++    int res;
++
++    if (g_card != NULL) {
++        pw_log_error("only one pal.card per process");
++        return -EEXIST;
++    }
++
++    c = calloc(1, sizeof(*c));
++    if (c == NULL)
++        return -errno;
++
++    c->context = udata->context;
++    spa_hook_list_init(&c->hooks);
++    c->spa_device.iface = SPA_INTERFACE_INIT(SPA_TYPE_INTERFACE_Device,
++            SPA_VERSION_DEVICE, &pal_card_device_methods, c);
++
++    c->props = pw_properties_new(
++            PW_KEY_MEDIA_CLASS, "Audio/Device",
++            PW_KEY_DEVICE_API, "pal",
++            PW_KEY_DEVICE_FORM_FACTOR, "internal",
++            PW_KEY_DEVICE_ICON_NAME, "audio-card",
++            PW_KEY_OBJECT_PATH, "pal:card",
++            NULL);
++    if (c->props == NULL) {
++        res = -errno;
++        free(c);
++        return res;
++    }
++    pw_properties_set(c->props, PW_KEY_DEVICE_NAME,
++            (str = pw_properties_get(args, PW_KEY_DEVICE_NAME)) ? str : "pal-card");
++    pw_properties_set(c->props, PW_KEY_DEVICE_DESCRIPTION,
++            (str = pw_properties_get(args, PW_KEY_DEVICE_DESCRIPTION)) ? str : "AudioReach");
++    pw_properties_set(c->props, PW_KEY_DEVICE_NICK,
++            pw_properties_get(c->props, PW_KEY_DEVICE_DESCRIPTION));
++
++    if ((str = pw_properties_get(args, "voice.volume")) != NULL)
++        voice_volume = SPA_CLAMP(strtof(str, NULL), 0.0f, 1.0f);
++
++    /* defaults: speaker at 40 %, call at voice.volume, mic at 100 % */
++    for (p = 0; p < PAL_CARD_N_PROFILES; p++) {
++        c->vol[p][PAL_CARD_DEV_SINK].n_channels = 2;
++        c->vol[p][PAL_CARD_DEV_SOURCE].n_channels = 1;
++    }
++    pal_card_volume_set_all(&c->vol[PAL_CARD_PROFILE_HIFI][PAL_CARD_DEV_SINK], 0.4f * 0.4f * 0.4f);
++    pal_card_volume_set_all(&c->vol[PAL_CARD_PROFILE_VOICE][PAL_CARD_DEV_SINK],
++                            voice_volume * voice_volume * voice_volume);
++    for (p = 0; p < PAL_CARD_N_PROFILES; p++)
++        pal_card_volume_set_all(&c->vol[p][PAL_CARD_DEV_SOURCE], 1.0f);
++
++    if ((str = getenv("XDG_STATE_HOME")) != NULL && str[0] == '/')
++        snprintf(c->state_file, sizeof(c->state_file), "%s/pipewire/pal-card.state", str);
++    else if ((str = getenv("HOME")) != NULL && str[0] == '/')
++        snprintf(c->state_file, sizeof(c->state_file),
++                 "%s/.local/state/pipewire/pal-card.state", str);
++    pal_card_load_state(c);
++
++    c->profile = PAL_CARD_PROFILE_HIFI;
++    c->sink_route = PAL_CARD_ROUTE_SPEAKER;
++    for (d = 0; d < PAL_CARD_N_DEVS; d++)
++        c->node[d] = NULL;
++
++    c->params[PAL_CARD_IDX_EnumProfile] = SPA_PARAM_INFO(SPA_PARAM_EnumProfile, SPA_PARAM_INFO_READ);
++    c->params[PAL_CARD_IDX_Profile] = SPA_PARAM_INFO(SPA_PARAM_Profile, SPA_PARAM_INFO_READWRITE);
++    c->params[PAL_CARD_IDX_EnumRoute] = SPA_PARAM_INFO(SPA_PARAM_EnumRoute, SPA_PARAM_INFO_READ);
++    c->params[PAL_CARD_IDX_Route] = SPA_PARAM_INFO(SPA_PARAM_Route, SPA_PARAM_INFO_READWRITE);
++    c->info = SPA_DEVICE_INFO_INIT();
++    c->info_all = SPA_DEVICE_CHANGE_MASK_PROPS | SPA_DEVICE_CHANGE_MASK_PARAMS;
++    c->info.change_mask = c->info_all;
++    c->info.params = c->params;
++    c->info.n_params = PAL_CARD_N_PARAMS;
++
++    c->device = pw_context_create_device(c->context, pw_properties_copy(c->props), 0);
++    if (c->device == NULL) {
++        res = -errno;
++        goto error;
++    }
++    if ((res = pw_impl_device_set_implementation(c->device, &c->spa_device)) < 0)
++        goto error;
++    if ((res = pw_impl_device_register(c->device, NULL)) < 0)
++        goto error;
++
++    g_card = c;
++    udata->is_card = true;
++    pw_log_info("pal card '%s' registered as device %u",
++                pw_properties_get(c->props, PW_KEY_DEVICE_NAME),
++                pw_global_get_id(pw_impl_device_get_global(c->device)));
++    return 0;
++
++error:
++    pw_log_error("can't create the pal card: %s", spa_strerror(res));
++    pal_card_destroy(c);
++    return res;
++}
++
++/* sink/source module: tie the node to the card before the stream exists */
++static void pal_card_attach(struct pw_userdata *udata)
++{
++    struct pal_card *c = g_card;
++    uint32_t dev = (uint32_t)udata->card_dev;
++
++    if (c == NULL || dev >= PAL_CARD_N_DEVS ||
++        (dev == PAL_CARD_DEV_SINK) != udata->isplayback || c->node[dev] != NULL) {
++        pw_log_error("pal.card.device %d: no card or wrong device, not attached",
++                     udata->card_dev);
++        udata->card_dev = -1;
++        return;
++    }
++    pw_properties_setf(udata->stream_props, PW_KEY_DEVICE_ID, "%u",
++            pw_global_get_id(pw_impl_device_get_global(c->device)));
++    pw_properties_setf(udata->stream_props, "card.profile.device", "%u", dev);
++    c->node[dev] = udata;
++}
++
++static void pal_card_detach(struct pw_userdata *udata)
++{
++    if (g_card && udata->card_dev >= 0 && udata->card_dev < PAL_CARD_N_DEVS &&
++        g_card->node[udata->card_dev] == udata)
++        g_card->node[udata->card_dev] = NULL;
++}
++
++static void pal_card_destroy_owned(struct pw_userdata *udata)
++{
++    uint32_t d;
++
++    if (!udata->is_card || g_card == NULL)
++        return;
++    for (d = 0; d < PAL_CARD_N_DEVS; d++)
++        if (g_card->node[d])
++            g_card->node[d]->card_dev = -1;
++    pal_card_destroy(g_card);
++    udata->is_card = false;
++}
++
++static bool pal_card_blocks_pcm(struct pw_userdata *udata)
++{
++    return g_card && udata->card_dev >= 0 && g_card->voice_active;
++}
++
++static void pal_card_node_paused(struct pw_userdata *udata)
++{
++    if (g_card && udata->card_dev >= 0)
++        pal_card_try_voice_start(g_card);
++}
++
++/* the stream's volume controls exist once it is connected; WirePlumber
++ * may also have set its own default by then, so apply on every start */
++static void pal_card_node_ready(struct pw_userdata *udata)
++{
++    if (!g_card || udata->card_dev < 0 || g_card->profile != PAL_CARD_PROFILE_HIFI)
++        return;
++    pal_card_apply_node_volume(g_card, udata->card_dev);
++}
++
+ SPA_EXPORT
+ int pipewire__module_init(struct pw_impl_module *module, const char *args)
+ {
+@@ -2060,6 +2962,8 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
+ 
+     udata->module = module;
+     udata->context = context;
++    udata->card_dev = -1;
++    udata->jack_fd = -1;
+     res = agm_init();
+     if (res) {
+         pw_log_error("%s: agm init failed\n", __func__);
+@@ -2070,6 +2974,19 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
+         pw_log_error("%s: pal init failed\n", __func__);
+         goto error;
+     }
++
++    if ((str = pw_properties_get(props, "pal.card")) != NULL && spa_atob(str)) {
++        if ((res = pal_card_create(udata, props)) < 0)
++            goto error;
++        pw_impl_module_add_listener(module, &udata->module_listener,
++                                    &pw_pal_events_module, udata);
++        return 0;
++    }
++    if ((str = pw_properties_get(props, "pal.card.device")) != NULL)
++        udata->card_dev = atoi(str);
++    if ((str = pw_properties_get(props, "pal.buffer.duration-ms")) != NULL)
++        udata->buffer_ms = (uint32_t)atoi(str);
++
+     if (pw_properties_get(props, PW_KEY_NODE_VIRTUAL) == NULL)
+         pw_properties_set(props, PW_KEY_NODE_VIRTUAL, "true");
+ 
+@@ -2101,6 +3018,8 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
+             udata->pal_device_id[0] = PAL_DEVICE_IN_SPEAKER_MIC;
+         else if (strstr(value, "pal_source_headset_mic"))
+             udata->pal_device_id[0] = PAL_DEVICE_IN_WIRED_HEADSET;
++        else if (strstr(value, "pal_source_handset_mic"))
++            udata->pal_device_id[0] = PAL_DEVICE_IN_HANDSET_MIC;
+         else if (strstr(value, "pal_sink_dp_out"))
+             udata->pal_device_id[0] = PAL_DEVICE_OUT_AUX_DIGITAL;
+         else if (strstr(value, "pal_sink_hdmi_out"))
+@@ -2163,6 +3082,9 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
+     pw_pal_set_props(udata, props, PW_KEY_NODE_VIRTUAL);
+     pw_pal_set_props(udata, props, PW_KEY_MEDIA_CLASS);
+ 
++    if (udata->card_dev >= 0 && !udata->is_sva)
++        pal_card_attach(udata);
++
+     pw_pal_fetch_audio_info(udata->stream_props, &udata->info);
+     if (udata->is_sva) {
+         
+-- 
+2.55.0
+
