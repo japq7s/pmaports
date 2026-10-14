@@ -1,0 +1,2 @@
+# PM8350B HV haptics (qcom-hv-haptics) as the feedbackd vibra device
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT}=="1", SUBSYSTEMS=="input", ATTRS{name}=="qcom-hv-haptics", TAG+="uaccess", ENV{FEEDBACKD_TYPE}="vibra"

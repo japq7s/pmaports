@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=19
+pkgrel=20
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -68,6 +68,9 @@ source="
 	audio-usecaseKvManager.xml
 	oplus-chg-blacklist.conf
 	oplus-chg-modules-load.conf
+	wake-alarm.conf
+	72-senna-haptics.rules
+	senna-touch-blacklist.conf
 "
 
 build() {
@@ -90,6 +93,14 @@ package() {
 	install -Dm755 "$srcdir"/senna-modem-system-sleep \
 		"$pkgdir"/usr/lib/systemd/system-sleep/senna-modem
 	install -Dm644 "$srcdir"/phoc.ini "$pkgdir"/etc/phosh/phoc.ini
+	install -Dm644 "$srcdir"/wake-alarm.conf \
+		"$pkgdir"/usr/lib/systemd/system/user@.service.d/90-wake-alarm.conf
+	install -Dm644 "$srcdir"/wake-alarm.conf \
+		"$pkgdir"/usr/lib/systemd/user/plasma-powerdevil.service.d/90-wake-alarm.conf
+	install -Dm644 "$srcdir"/72-senna-haptics.rules \
+		"$pkgdir"/usr/lib/udev/rules.d/72-senna-haptics.rules
+	install -Dm644 "$srcdir"/senna-touch-blacklist.conf \
+		"$pkgdir"/usr/lib/modprobe.d/senna-touch.conf
 
 	# Audio: Qualcomm AudioReach (PAL/AGM/GSL) instead of the upstream
 	# q6apm ASoC stack (ACDB calibration: firmware-realme-senna-b). Use-case data come from the stock
@@ -170,4 +181,7 @@ d5aba97ea4608d8a2a238dd79c844569cc49e17ee018f77990cbac299a5518e2f231cdfc8a6a13fb
 2e18c7088a6ab61720823fdf82bf040f42009763583e4c3e1fa4d9d28bb7b97ec70f70e9e3a7e3f228d5e0e89233c61be88aa268af87e02330fecbfb71bf34ac  audio-usecaseKvManager.xml
 1c89d7fdfff83dc0fc340118a8f6fe32d9afcd0654da9d9c6521d68ad086c5bd56a1b626666cce061c791c80b37a983c89cc93ee3ec25a055ab2edfa90d69c30  oplus-chg-blacklist.conf
 7c7f3d33a3e615bea9530c68289212c141451ab7006c4ccdec7f349e8dfab38f21396e7ad8b6adbc3733e9b35e4639dc85745c7d2ec94dee5d5b9533b9b83d81  oplus-chg-modules-load.conf
+18fa7b230af1ffeb2134a4a2ea0dda5d4042020395a92691a4f2a58632f53d183b87404bc965e3fc6d2e634c8aa2e12317e996f7b8e89ae330f22a583ac4d791  wake-alarm.conf
+a719187894378c61f47763aae75a3b1e94b403bb1c6f91608c9056838dc7ee3b829c68301862db6c795eb068d489c44a5a164a6331888549f78e9054f34120ec  72-senna-haptics.rules
+1a039c2e7414646568c187d25cc441ec118f0281b6840c6aee88fcc9ced427f1852d641286fd0e2ed35a82e1abab7ccce6f968d4a56192fab678540b7b70c320  senna-touch-blacklist.conf
 "
