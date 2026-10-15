@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: CC0-1.0
+# Soft-IPA tuning for the realme GT Neo5 (senna) ultra wide Sony IMX355 (sunny module).
+# Black level: 64 DN @ 10 bit (stock bls12), 64 << 6 = 4096 @ 16 bit.
+# CCMs: from the stock cc13_ife_v2 tables in com.qti.tuned.imx355_sunny.bin;
+# the colour temperature assigned to each matrix is approximate.
+%YAML 1.1
+---
+version: 1
+algorithms:
+  - BlackLevel:
+      blackLevel: 4096
+  - Awb:
+  - Ccm:
+      ccms:
+        - ct: 2850
+          ccm: [ 2.03716, -1.1349, 0.09774,
+                 -0.3363, 1.26667, 0.06963,
+                 -0.17903, -0.92271, 2.10173 ]
+        - ct: 4000
+          ccm: [ 1.77729, -0.85258, 0.07529,
+                 -0.23405, 1.25382, -0.01977,
+                 -0.02856, -0.7319, 1.76045 ]
+        - ct: 5500
+          ccm: [ 1.79399, -0.83337, 0.03938,
+                 -0.12723, 1.28726, -0.16003,
+                 0.10693, -0.77267, 1.66574 ]
+        - ct: 6500
+          ccm: [ 1.78852, -0.97947, 0.19095,
+                 -0.13365, 1.23467, -0.10103,
+                 0.11139, -0.85276, 1.74138 ]
+  - Adjust:
+  - Agc:
+...
