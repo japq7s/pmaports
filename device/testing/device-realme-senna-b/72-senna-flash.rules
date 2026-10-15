@@ -1,0 +1,5 @@
+# Rear flash LED: let camera apps in the video group (Megapixels) fire the
+# flash, which they do through flash_strobe of the LED flash class device.
+ACTION=="add", SUBSYSTEM=="leds", KERNEL=="white:flash", \
+	RUN+="/bin/chgrp video /sys%p/flash_strobe /sys%p/flash_brightness /sys%p/flash_timeout", \
+	RUN+="/bin/chmod g+w /sys%p/flash_strobe /sys%p/flash_brightness /sys%p/flash_timeout"
