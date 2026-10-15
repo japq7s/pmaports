@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=22
+pkgrel=23
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -72,6 +72,8 @@ source="
 	72-senna-haptics.rules
 	senna-touch-blacklist.conf
 	libcamera-imx355.yaml
+	libcamera-imx890.yaml
+	millipixels-realme,senna-b.ini
 "
 
 build() {
@@ -106,6 +108,11 @@ package() {
 	# takes precedence over the generic file shipped by libcamera-ipa.
 	install -Dm644 "$srcdir"/libcamera-imx355.yaml \
 		"$pkgdir"/etc/libcamera/ipa/simple/imx355.yaml
+	install -Dm644 "$srcdir"/libcamera-imx890.yaml \
+		"$pkgdir"/etc/libcamera/ipa/simple/imx890.yaml
+	# Millipixels looks its camera config up by the DT compatible.
+	install -Dm644 "$srcdir"/millipixels-realme,senna-b.ini \
+		"$pkgdir"/usr/share/millipixels/config/realme,senna-b.ini
 
 	# Audio: Qualcomm AudioReach (PAL/AGM/GSL) instead of the upstream
 	# q6apm ASoC stack (ACDB calibration: firmware-realme-senna-b). Use-case data come from the stock
@@ -190,4 +197,6 @@ d5aba97ea4608d8a2a238dd79c844569cc49e17ee018f77990cbac299a5518e2f231cdfc8a6a13fb
 a719187894378c61f47763aae75a3b1e94b403bb1c6f91608c9056838dc7ee3b829c68301862db6c795eb068d489c44a5a164a6331888549f78e9054f34120ec  72-senna-haptics.rules
 1a039c2e7414646568c187d25cc441ec118f0281b6840c6aee88fcc9ced427f1852d641286fd0e2ed35a82e1abab7ccce6f968d4a56192fab678540b7b70c320  senna-touch-blacklist.conf
 7d909efcc7135ab4f1a4a86cfbf21ed14b9f873a2f5d76b3be7138d7bfc24d2603e2f7f6b961464ab1373869d836bd4fa186d0347d93d35b2e6ddba0ab2c26c6  libcamera-imx355.yaml
+2cc04aa12e58c011cb443d1860974a4ca176e80ada93d5fc478e4b3db7dabd481e44b449cbbe5bfc8b528f3e9f140440678ef463e88ca4719a84c7dfe363837e  libcamera-imx890.yaml
+a58e7e08c1b88c300e3142acbc59bf7dd835d3140c1631ee265459bd952f4eb305551a2ded9fb5fa25217aa1f8988b517601a23d5f6515e0efa6e29b5b368789  millipixels-realme,senna-b.ini
 "
