@@ -75,6 +75,8 @@ source="
 	libcamera-imx890.yaml
 	millipixels-realme,senna-b.ini
 	megapixels-realme,senna-b.conf
+	megapixels-realme,senna-b,Rear.dcp
+	megapixels-realme,senna-b,Wide.dcp
 	72-senna-flash.rules
 "
 
@@ -117,6 +119,12 @@ package() {
 		"$pkgdir"/usr/share/millipixels/config/realme,senna-b.ini
 	install -Dm644 "$srcdir"/megapixels-realme,senna-b.conf \
 		"$pkgdir"/usr/share/megapixels/config/realme,senna-b.conf
+	# Colour calibration (stock CCMs) and preview gamma, by camera name.
+	local _cam
+	for _cam in Rear Wide; do
+		install -Dm644 "$srcdir"/megapixels-realme,senna-b,$_cam.dcp \
+			"$pkgdir"/usr/share/megapixels/config/realme,senna-b,$_cam.dcp
+	done
 	# Megapixels fires the flash through flash_strobe of the LED.
 	install -Dm644 "$srcdir"/72-senna-flash.rules \
 		"$pkgdir"/usr/lib/udev/rules.d/72-senna-flash.rules
@@ -207,5 +215,7 @@ a719187894378c61f47763aae75a3b1e94b403bb1c6f91608c9056838dc7ee3b829c68301862db6c
 2cc04aa12e58c011cb443d1860974a4ca176e80ada93d5fc478e4b3db7dabd481e44b449cbbe5bfc8b528f3e9f140440678ef463e88ca4719a84c7dfe363837e  libcamera-imx890.yaml
 a58e7e08c1b88c300e3142acbc59bf7dd835d3140c1631ee265459bd952f4eb305551a2ded9fb5fa25217aa1f8988b517601a23d5f6515e0efa6e29b5b368789  millipixels-realme,senna-b.ini
 3a68c0a3b92213c8caf4c8069f9ab8a874d8de41d953e344d66e5fdea4bc2c4b9a62f3d41a8e80e5362f890c3d104f74c72659a4c2e0da9b9e7ebe5288eb2a6d  megapixels-realme,senna-b.conf
+2aa69815a92980fdde98d733284951b2fcdcb21c27614ba9a1497cbffcf7093d9f590c4dcf8bb484bfb1569c991650f20f933db8f0154c30f00e5308acf488e9  megapixels-realme,senna-b,Rear.dcp
+77e899a8b5cab46525b6976da8bed8abe94329fd3d408e903c566e6cf2bfb8d939b137eb32e9f2cc61f190bec92d14fb744511d1ddf777379fd902dc4abaee33  megapixels-realme,senna-b,Wide.dcp
 48eb07b04d5140b37a72e72081448806fd9031524c9bfe125656ea8bac8a240db682d9a5adce1f0e95d57625a83c0e4617d2123b7ebb47476a9eadd489629964  72-senna-flash.rules
 "
