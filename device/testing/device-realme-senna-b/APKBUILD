@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=20
+pkgrel=21
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -156,7 +156,7 @@ _pipewire() {
 }
 
 sha512sums="
-700d09f18519571f91d8b3c2056eb8426aae67fa4b810252b3f3b72b6949b9b3ac8c3ade3b924b39700a565803c9d70340bc665546abd93b3b5e351b9a21a707  deviceinfo
+e0d4b26b31bc36061774d72f9009f8b5644eb93040440a0d7c0ab70a5a4f317ba1f4d968db5183fd02311bba7f32098540f7979fbfe90e57ca7a8613a65969ea  deviceinfo
 ebe83921bd566370cc548b2b2b3b158e56e2d1b25cabd793a0ddecb91e703150610599dc249968a17b427337f8b0609adcf46b778df0bfc77ce2eb43cad828e9  modules-initfs
 cc561eb2ff8e5c94e5bc3ef456403ad7aee9a25d1973cdc1bcc6b132129c6c7c7b5c2cc22da75812def7becef72d23366424449ff757b89ff5bc82167f353148  90-senna-gpu-nopm.rules
 b8fcf239570ae1f68f4abbce19314644ec8009a1d02c8e10e8b6fbc7104de86dc2b9a3d97016ad6df385d14ce51b9de671598bb3aff01d6534158b1bca3017a0  90-senna-wlan-l1ss.rules
