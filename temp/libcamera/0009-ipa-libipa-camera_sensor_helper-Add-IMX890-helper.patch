@@ -3,20 +3,20 @@ From: japq7s <japiotr123@proton.me>
 Date: Thu, 15 Oct 2026 15:03:25 +0200
 Subject: [PATCH] ipa: libipa: camera_sensor_helper: Add IMX890 helper
 
-Add a camera sensor helper for the Sony IMX890. The analogue gain uses the
-usual Sony CCS model, gain = 1024 / (1024 - code), and the black level of
-64 at 10 bits was measured on raw frames from a realme GT Neo5.
+Add a camera sensor helper for the Sony IMX890. The driver exposes the
+analogue gain linearly in 1/256 steps, and the black level of 64 at 10 bits
+was measured on raw frames from a realme GT Neo5.
 
 Signed-off-by: japq7s <japiotr123@proton.me>
 ---
- src/ipa/libipa/camera_sensor_helper.cpp | 12 ++++++++++++
- 1 file changed, 12 insertions(+)
+ src/ipa/libipa/camera_sensor_helper.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
 
 diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
 index 9457d62..bd212ee 100644
 --- a/src/ipa/libipa/camera_sensor_helper.cpp
 +++ b/src/ipa/libipa/camera_sensor_helper.cpp
-@@ -665,6 +665,18 @@ public:
+@@ -665,6 +665,19 @@ public:
  };
  REGISTER_CAMERA_SENSOR_HELPER("imx708", CameraSensorHelperImx708)
  
@@ -27,7 +27,8 @@ index 9457d62..bd212ee 100644
 +	{
 +		/* From dark frame measurement: 0x40 at 10bits. */
 +		blackLevel_ = 4096;
-+		gain_ = AnalogueGainLinear{ 0, 1024, -1, 1024 };
++		/* The driver control is linear, 256 = 1x. */
++		gain_ = AnalogueGainLinear{ 1, 0, 0, 256 };
 +	}
 +};
 +REGISTER_CAMERA_SENSOR_HELPER("imx890", CameraSensorHelperImx890)
