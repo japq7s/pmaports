@@ -30,4 +30,10 @@ for part in dsp_a dsp_b; do
 done
 [ -d "$dst/sdsp" ] || { echo "senna-sensors-setup: no sdsp libraries" >&2; exit 1; }
 
+# The copies keep the Android owner (uid 1000) and modes (0600);
+# hexagonrpcd runs as fastrpc and only reads them.
+chown -R root:root "$dst/registry" "$dst/sdsp"
+find "$dst/registry" "$dst/sdsp" -type d -exec chmod 0755 {} +
+find "$dst/registry" "$dst/sdsp" -type f -exec chmod 0644 {} +
+
 touch "$dst/.done"
