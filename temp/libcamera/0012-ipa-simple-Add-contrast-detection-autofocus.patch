@@ -1,7 +1,7 @@
-From ee555b2283e932269c95210fa835ee2052e732df Mon Sep 17 00:00:00 2001
+From 98e6529e85d6cc5e7fd548bc2bfbbb7930f19411 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Sun, 18 Oct 2026 14:30:05 +0200
-Subject: [PATCH 12/12] ipa: simple: Add contrast detection autofocus
+Subject: [PATCH] ipa: simple: Add contrast detection autofocus
 
 Add an Af algorithm for the soft IPA, enabled by an Af entry in the
 tuning file, using the focus measure of the software ISP statistics
@@ -27,21 +27,21 @@ range), macroDioptres (default 10), coarseSteps (12), fineSteps (4).
 
 Signed-off-by: japq7s <japiotr123@proton.me>
 ---
- src/ipa/simple/algorithms/af.cpp      | 388 ++++++++++++++++++++++++++
- src/ipa/simple/algorithms/af.h        |  92 ++++++
+ src/ipa/simple/algorithms/af.cpp      | 406 ++++++++++++++++++++++++++
+ src/ipa/simple/algorithms/af.h        |  94 ++++++
  src/ipa/simple/algorithms/meson.build |   1 +
  src/ipa/simple/ipa_context.h          |   6 +
  src/ipa/simple/soft_simple.cpp        |  14 +
- 5 files changed, 501 insertions(+)
+ 5 files changed, 521 insertions(+)
  create mode 100644 src/ipa/simple/algorithms/af.cpp
  create mode 100644 src/ipa/simple/algorithms/af.h
 
 diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
 new file mode 100644
-index 0000000..78b3455
+index 0000000..47fd61d
 --- /dev/null
 +++ b/src/ipa/simple/algorithms/af.cpp
-@@ -0,0 +1,388 @@
+@@ -0,0 +1,406 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Contrast detection autofocus
@@ -79,7 +79,8 @@ index 0000000..78b3455
 + * measure has clearly passed its peak, then scans around the best coarse
 + * position in fine steps and settles on the interpolated peak.
 + *
-+ * In continuous mode the lens is left alone once focused. A new scan only
++ * In continuous mode the first scan waits until the scene, and the exposure
++ * with it, is stable. The lens is left alone once focused. A new scan only
 + * starts when the scene has changed (focus measure or brightness away from
 + * the values at the end of the scan for several measurements) and has then
 + * become stable again, so that the lens does not hunt while the camera is
@@ -156,11 +157,26 @@ index 0000000..78b3455
 +		<< " (" << macroDioptres_ << " dioptres)";
 +
 +	if (mode_ == controls::AfModeContinuous)
-+		startScan(context);
++		waitForStableScene();
 +	else
 +		state_ = State::Idle;
 +
 +	return 0;
++}
++
++void Af::waitForStableScene()
++{
++	/*
++	 * At stream start the exposure is still converging, and a scan taken
++	 * meanwhile measures a changing image. Wait for the scene to settle,
++	 * as after a scene change.
++	 */
++	state_ = State::Waiting;
++	needReference_ = false;
++	changePending_ = true;
++	stable_ = 0;
++	lastContrast_ = 0.0;
++	lastMean_ = 0.0;
 +}
 +
 +void Af::queueRequest(typename Module::Context &context,
@@ -382,6 +398,7 @@ index 0000000..78b3455
 +	int32_t afState = controls::AfStateIdle;
 +	if (mode_ != controls::AfModeManual) {
 +		switch (state_) {
++		case State::Waiting:
 +		case State::CoarseScan:
 +		case State::FineScan:
 +			afState = controls::AfStateScanning;
@@ -416,6 +433,7 @@ index 0000000..78b3455
 +	case State::FineScan:
 +		scanStep(context, contrast);
 +		break;
++	case State::Waiting:
 +	case State::Focused:
 +	case State::Failed:
 +		monitor(context, contrast, mean);
@@ -432,10 +450,10 @@ index 0000000..78b3455
 +} /* namespace libcamera */
 diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
 new file mode 100644
-index 0000000..6f8f9f1
+index 0000000..3d63146
 --- /dev/null
 +++ b/src/ipa/simple/algorithms/af.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,94 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Contrast detection autofocus
@@ -472,6 +490,7 @@ index 0000000..6f8f9f1
 +private:
 +	enum class State {
 +		Idle,
++		Waiting,
 +		CoarseScan,
 +		FineScan,
 +		Focused,
@@ -480,6 +499,7 @@ index 0000000..6f8f9f1
 +
 +	void moveTo(IPAContext &context, int32_t position);
 +	void startScan(IPAContext &context);
++	void waitForStableScene();
 +	void scanStep(IPAContext &context, double contrast);
 +	void finishScan(IPAContext &context);
 +	void monitor(IPAContext &context, double contrast, double mean);
