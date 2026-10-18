@@ -52,12 +52,14 @@ then
 	DCRAW=dcraw_emu
 	# -fbdd 1	Raw denoising with FBDD
 	# -a		Auto white balance (Megapixels 2.1 writes AsShotNeutral inverted)
-	set -- -fbdd 1 -a
+	# -k 64		Black level of the 10-bit sensors (libdng writes no BlackLevel)
+	set -- -fbdd 1 -a -k 64
 elif [ -x "/usr/lib/libraw/dcraw_emu" ]; then
 	DCRAW=/usr/lib/libraw/dcraw_emu
 	# -fbdd 1	Raw denoising with FBDD
 	# -a		Auto white balance (Megapixels 2.1 writes AsShotNeutral inverted)
-	set -- -fbdd 1 -a
+	# -k 64		Black level of the 10-bit sensors (libdng writes no BlackLevel)
+	set -- -fbdd 1 -a -k 64
 elif command -v "dcraw" > /dev/null
 then
 	DCRAW=dcraw
