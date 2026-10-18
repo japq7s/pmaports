@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=27
+pkgrel=28
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -65,7 +65,10 @@ source="
 	wireplumber-senna.conf
 	61-senna-fastrpc-sdsp.rules
 	81-libssc-senna.rules
-	80-senna-sensors.preset
+	80-senna.preset
+	senna-mark-boot-successful
+	senna-mark-boot-successful.service
+	senna-mark-boot-successful.timer
 	senna-sensors-setup
 	senna-sensors-setup.service
 	hexagonrpcd-sdsp-senna.conf
@@ -100,14 +103,23 @@ build() {
 package() {
 	devicepkg_package $startdir $pkgname
 
+	# A/B: mark the booted slot successful (the bootloader falls back to the
+	# other slot after 7 unmarked boots). Never qbootctl on this device.
+	install -Dm755 "$srcdir"/senna-mark-boot-successful \
+		"$pkgdir"/usr/libexec/senna-mark-boot-successful
+	install -Dm644 "$srcdir"/senna-mark-boot-successful.service \
+		"$pkgdir"/usr/lib/systemd/system/senna-mark-boot-successful.service
+	install -Dm644 "$srcdir"/senna-mark-boot-successful.timer \
+		"$pkgdir"/usr/lib/systemd/system/senna-mark-boot-successful.timer
+
 	# Sensors on the SLPI: hexagonrpcd-sdsp serves the files the SSC reads,
 	# libssc + iio-sensor-proxy talk to it.
 	install -Dm644 "$srcdir"/61-senna-fastrpc-sdsp.rules \
 		"$pkgdir"/usr/lib/udev/rules.d/61-senna-fastrpc-sdsp.rules
 	install -Dm644 "$srcdir"/81-libssc-senna.rules \
 		"$pkgdir"/usr/lib/udev/rules.d/81-libssc-senna.rules
-	install -Dm644 "$srcdir"/80-senna-sensors.preset \
-		"$pkgdir"/usr/lib/systemd/system-preset/80-senna-sensors.preset
+	install -Dm644 "$srcdir"/80-senna.preset \
+		"$pkgdir"/usr/lib/systemd/system-preset/80-senna.preset
 	install -Dm755 "$srcdir"/senna-sensors-setup \
 		"$pkgdir"/usr/libexec/senna-sensors-setup
 	install -Dm644 "$srcdir"/senna-sensors-setup.service \
@@ -246,7 +258,10 @@ f1640277ea91695b66d1e4bb01921fed95569d589d1ba5716803a44c3753a8d8a455e636958107b3
 24f9a94de7d01763435b8f3c65a65cf018b28608517f9f212405eae764ec23c5bcbe69fb2cbe44a1ee0d6c85b76924feceb5e4a73a19cb29791c0f6ad737b265  wireplumber-senna.conf
 2ae28242250408247f423da72b7cc9aeb94cb2dd1bcdea8fc22b5725918a16368283cf1556de9e5a5470c7ed153050a69ea28a2506dd8c4775a9fcf7f50cec08  61-senna-fastrpc-sdsp.rules
 e2c113899cf6a375cf1bf75ef418b984fe7e3873bdd85126415d1c4b7d6b9f9f18b3fcf6358bc3bc1f08007625824d53bbb30a8ec8a31f1c40d09d7ff9141dbe  81-libssc-senna.rules
-bbc98c9e9d39145c57fdb3ddc2ee1adc5b1c54265a537bcba199b9b30b08665299d23924da0d2be91724482d5b36e26e0fcf372f89df3324fbbd59c92f8e2726  80-senna-sensors.preset
+c1b46504b0da6c48e08bcb78ecef440bd387ed374c8e3ad21dcfc4b18a8ff91e6d030e61fa80e6807bfcff07164d37cb3186a2c471cd5a4a9bec89807bfb703f  80-senna.preset
+454f10261d834dccd61e1315a5b42dacbe7f592ec29d8af45cc04c1a8f5e01dbe7d50ebe64b88ae6d0113aebe112cbffcf71766c53072ef5d2c04b9837c61183  senna-mark-boot-successful
+f4b93fc97eaef0e1a1211a2f3fe2af4070e8e1206fef37435fd9cae55a4e77e8239cec95e2505347ef0c37553438c7e0a5e34e150484b15d999f8efb0084d04f  senna-mark-boot-successful.service
+ba7408847e1c3699af78e1f3f16e8777ee40a8a6b78616326728ba6b777c55c633ae3790efcc4e94ec816b8829e115adb963fffda0878efee1bddabbf34874d9  senna-mark-boot-successful.timer
 23daf608b54e6f45dba5779e34d931e156751b43af179c5e649da69b73dce1178bc6051cc35931f01ed3cd57fb4d112445d0d0df0010dc8fa190fb08df525953  senna-sensors-setup
 0a212ac11f269fc3c32372bfc1b175c30711f0d381abaaaf2804256b05f6d981a5b43cfc19c400dd30a5dbfe54c32b7dd69c6c90bec2ae0a389c8eabef387a8b  senna-sensors-setup.service
 8e5e2b326546845efa81f689c2b92d33c3898eb989276813a532067218b7a015dc487a1ea4e5a0a97f494cc380efeaed793a66ffecde44968fee58dc2b0fd15e  hexagonrpcd-sdsp-senna.conf

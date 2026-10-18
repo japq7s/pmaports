@@ -1,0 +1,157 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+Mark the booted slot successful, as the Android boot_control HAL does.
+
+The bootloader decrements the retry count of the active slot (attributes of
+the boot_a/boot_b GPT entry) at every boot that has not been marked
+successful, and falls back to the other slot when it reaches 0.
+
+Only the "successful" bit (54) of the ACTIVE boot_X entry is changed in the
+primary GPT; nothing else (no slot switch, no boot LUN, no other partition).
+The backup entries are rewritten from the primary ones, as the Qualcomm
+boot_control HAL does: the bootloader updates the retry count in the backup
+entries without fixing their CRC. That is only done when the two copies
+differ in nothing but the attributes of boot_a/boot_b.
+Never use qbootctl on this device.
+
+Usage: senna-mark-boot-successful [--dry-run] [DISK_OR_IMAGE]
+"""
+import os
+import struct
+import sys
+import zlib
+
+SECTOR = 4096
+SUCCESSFUL = 1 << 54
+ACTIVE = 1 << 50
+UNBOOTABLE = 1 << 55
+
+
+def crc(data):
+    return zlib.crc32(data) & 0xffffffff
+
+
+class Gpt:
+    def __init__(self, f, lba, check_entries=True):
+        self.f = f
+        self.lba = lba
+        f.seek(lba * SECTOR)
+        self.hdr = bytearray(f.read(SECTOR))
+        (sig, _rev, self.hsz, hcrc, _r, self.cur, self.alt, _first, _last,
+         _guid, self.elba, self.n, self.esz, ecrc) = \
+            struct.unpack_from("<8sIIIIQQQQ16sQIII", self.hdr)
+        if sig != b"EFI PART" or self.cur != lba:
+            raise ValueError(f"no GPT header at LBA {lba}")
+        f.seek(self.elba * SECTOR)
+        self.ents = bytearray(f.read(self.n * self.esz))
+        if crc(self.header_for_crc()) != hcrc or \
+                (check_entries and crc(self.ents) != ecrc):
+            raise ValueError(f"bad CRC in the GPT at LBA {lba}")
+
+    def header_for_crc(self):
+        h = bytearray(self.hdr[:self.hsz])
+        struct.pack_into("<I", h, 16, 0)
+        return bytes(h)
+
+    def entry(self, name):
+        found = []
+        for i in range(self.n):
+            e = self.ents[i * self.esz:(i + 1) * self.esz]
+            if e[56:128].decode("utf-16-le").rstrip("\0") == name:
+                found.append(i)
+        return found
+
+    def attr(self, i):
+        return struct.unpack_from("<Q", self.ents, i * self.esz + 48)[0]
+
+    def set_attr(self, i, value):
+        struct.pack_into("<Q", self.ents, i * self.esz + 48, value)
+        struct.pack_into("<I", self.hdr, 88, crc(self.ents))
+        struct.pack_into("<I", self.hdr, 16, crc(self.header_for_crc()))
+
+    def write(self):
+        self.f.seek(self.elba * SECTOR)
+        self.f.write(self.ents)
+        self.f.seek(self.lba * SECTOR)
+        self.f.write(self.hdr)
+
+
+def find_disk():
+    for d in sorted(os.listdir("/sys/block")):
+        if not d.startswith("sd"):
+            continue
+        with open("/dev/" + d, "rb") as f:
+            try:
+                g = Gpt(f, 1)
+            except ValueError:
+                continue
+            if g.entry("boot_a") and g.entry("boot_b"):
+                return "/dev/" + d
+    return None
+
+
+def main():
+    args = sys.argv[1:]
+    dry = "--dry-run" in args
+    args = [a for a in args if a != "--dry-run"]
+    disk = args[0] if args else find_disk()
+    if not disk:
+        sys.exit("senna-mark-boot-successful: no disk with boot_a/boot_b")
+
+    with open(disk, "rb" if dry else "r+b") as f:
+        prim = Gpt(f, 1)
+        back = Gpt(f, prim.alt, check_entries=False)
+        if (back.n, back.esz) != (prim.n, prim.esz):
+            sys.exit("senna-mark-boot-successful: primary and backup tables differ in size")
+        slot_attrs = set()
+        for slot in ("boot_a", "boot_b"):
+            for i in prim.entry(slot):
+                slot_attrs.update(range(i * prim.esz + 48, i * prim.esz + 56))
+        if any(a != b and k not in slot_attrs
+               for k, (a, b) in enumerate(zip(prim.ents, back.ents))):
+            sys.exit("senna-mark-boot-successful: backup entries differ beyond the slot attributes, not touching them")
+
+        active = []
+        for slot in ("boot_a", "boot_b"):
+            idx = prim.entry(slot)
+            if len(idx) != 1:
+                sys.exit(f"senna-mark-boot-successful: {len(idx)} entries named {slot}")
+            if prim.attr(idx[0]) & ACTIVE:
+                active.append((slot, idx[0]))
+        if len(active) != 1:
+            sys.exit(f"senna-mark-boot-successful: {len(active)} active boot slots")
+
+        slot, i = active[0]
+        old = prim.attr(i)
+        if old & UNBOOTABLE:
+            sys.exit(f"senna-mark-boot-successful: {slot} is marked unbootable")
+        if old & SUCCESSFUL:
+            print(f"{slot} already successful ({old:016x})")
+            return
+        new = old | SUCCESSFUL
+        print(f"{slot}: {old:016x} -> {new:016x}{' (dry run)' if dry else ''}")
+        if dry:
+            return
+
+        prim.set_attr(i, new)
+        back.ents[:] = prim.ents
+        back.set_attr(i, new)
+        # Backup first: if the write is interrupted, the primary still holds
+        # a consistent old table.
+        back.write()
+        f.flush()
+        os.fsync(f.fileno())
+        prim.write()
+        f.flush()
+        os.fsync(f.fileno())
+
+    with open(disk, "rb") as f:
+        prim = Gpt(f, 1)
+        back = Gpt(f, prim.alt)
+        if prim.attr(i) != new or back.attr(i) != new:
+            sys.exit("senna-mark-boot-successful: read-back mismatch")
+
+
+if __name__ == "__main__":
+    main()

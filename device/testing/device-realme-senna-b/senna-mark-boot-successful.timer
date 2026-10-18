@@ -1,0 +1,11 @@
+[Unit]
+Description=Mark the booted A/B slot successful once the system has been up for a while
+
+[Timer]
+# Like Android after boot completed: a kernel that resets or hangs early
+# keeps the retry count going down, so the bootloader can still fall back.
+OnBootSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

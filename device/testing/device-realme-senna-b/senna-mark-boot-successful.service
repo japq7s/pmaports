@@ -1,0 +1,7 @@
+[Unit]
+Description=Mark the booted A/B slot successful
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/senna-mark-boot-successful
