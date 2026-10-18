@@ -1,0 +1,44 @@
+From 945be353f64c1e1c81d6601475083ed9a9553cd3 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 00:07:33 +0200
+Subject: [PATCH] Do not reset the gain from the IO thread
+
+With no hardware autogain, update_controls() in the IO thread treated the
+gain as manual and wrote gain.value_req, which comes from the UI state,
+whenever the cached value differed from it. The software AE of the
+process pipeline drives the gain in that case, and after every capture
+the UI state reached the IO thread and the gain was reset to a stale
+value, often the minimum: the next photo was many times darker than the
+preview (16x on the realme GT Neo5).
+
+Only write a manual gain from the IO thread.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/io_pipeline.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/src/io_pipeline.c b/src/io_pipeline.c
+index 0879923..7aa4eac 100644
+--- a/src/io_pipeline.c
++++ b/src/io_pipeline.c
+@@ -293,8 +293,14 @@ update_controls()
+                 state_changed = true;
+         }
+ 
+-        if ((state_io.gain.manual ||
+-             (!state_io.gain.manual && state_io.gain.auto_control.id == 0)) &&
++        /*
++         * Only a manual gain is written from here. Without a hardware
++         * autogain the software AE of the process pipeline drives the gain;
++         * writing the request from the UI state here as well reset it to a
++         * stale value (often the minimum) after every capture, so the next
++         * photo came out many times darker.
++         */
++        if (state_io.gain.manual &&
+             state_io.gain.value != state_io.gain.value_req) {
+                 mp_camera_control_set_int32_bg(
+                         mpcamera, &state_io.gain.control, state_io.gain.value_req);
+-- 
+2.55.0
+

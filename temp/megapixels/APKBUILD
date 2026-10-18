@@ -3,7 +3,7 @@
 # Maintainer: japq7s <japiotr123@proton.me>
 pkgname=megapixels
 pkgver=2.1.0
-pkgrel=100
+pkgrel=101
 pkgdesc="GTK+4 camera app for mobile devices"
 url="https://gitlab.com/megapixels-org/Megapixels"
 arch="all !s390x"
@@ -25,6 +25,7 @@ makedepends="
 	"
 source="https://gitlab.com/megapixels-org/Megapixels/-/archive/$pkgver/Megapixels-$pkgver.tar.bz2
 	0001-keep-the-camera-settings-and-focus-during-a-capture.patch
+	0002-do-not-reset-the-gain-from-the-io-thread.patch
 	"
 options="!check" # There's no testsuite
 builddir="$srcdir/Megapixels-$pkgver"
@@ -41,4 +42,5 @@ package() {
 sha512sums="
 0269e3d119abe3ae9a2a69e6796329429a8b54e8bb3f4928c62a54cef5c665abb152d55f0d9d07ab53cd81b397b0d7e81b3a1dff0f6f1b15a2713d5c0e193c88  Megapixels-2.1.0.tar.bz2
 6c2340313726945c9f7249640e5862e8995bbd6d7e8b33eae6511e0f2b5b5697056429145ff926a7fbb2541bfba2ac232d5be5a5270f1561cc8439977c7cf691  0001-keep-the-camera-settings-and-focus-during-a-capture.patch
+b21c41ddb522bb123fd2c491cc1cde0ec24004f80b06cdf398ffb6fbd01a859c12a557846468ef0edaf89845e8fbc08aa9e9938c0c5208eef93b9d7fb0db29d7  0002-do-not-reset-the-gain-from-the-io-thread.patch
 "
