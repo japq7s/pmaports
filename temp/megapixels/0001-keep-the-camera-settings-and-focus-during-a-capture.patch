@@ -1,0 +1,113 @@
+From 62aaa20b728f38ea5d455e8d788f254b2f75e7a4 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Sun, 18 Oct 2026 23:40:26 +0200
+Subject: [PATCH] Keep the camera settings and focus during a capture
+
+process_aaa() kept running while a burst was captured: the auto exposure
+wrote new gain values and the autofocus moved the lens in the middle of
+the burst, so the photos came out much darker than the preview, or
+blurred. Skip it while captures are remaining.
+
+After a capture the stream restarts and the first frames look nothing
+like the scene, so the focus tracking saw the sharpness collapse and
+started a full sweep: the picture visibly breathed after every photo.
+Skip a few AF statistics after a capture and take the settled sharpness
+as the new reference instead.
+
+Sweep from the low end of the focus control instead of a hard-coded 200,
+which is above infinity for lenses whose range starts at 0, so far
+subjects could never be focused.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/process_pipeline.c | 39 ++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/src/process_pipeline.c b/src/process_pipeline.c
+index 4b37afb..33dbc70 100644
+--- a/src/process_pipeline.c
++++ b/src/process_pipeline.c
+@@ -387,7 +387,20 @@ update_control(controlstate *control)
+ 
+ static int focus;
+ static int focus_phase;
+-static const int focus_inf = 200;
++static const int focus_inf_default = 200;
++/* AF statistics to skip after a capture, while the stream restarts. */
++static int focus_settle;
++
++/*
++ * Lens position of infinity: the low end of the focus control. Drivers that
++ * do not start at 0 keep the historical 200.
++ */
++static int
++focus_inf(void)
++{
++	return state_proc.focus.control.min > 0 ? focus_inf_default :
++	       state_proc.focus.control.min;
++}
+ 
+ static void
+ auto_focus_start(void)
+@@ -409,6 +422,17 @@ auto_focus_step(const struct focus_stats *stats)
+ 	static uint64_t best_sharp, best_focus;
+ 	static const int debug = 0;
+ 
++	if (focus_phase >= PH_DONE && focus_settle > 0) {
++		/*
++		 * The frames right after a capture (stream restart, flushed
++		 * buffers) look nothing like the scene: keep the lens where it
++		 * is and take the sharpness of the settled frames as the new
++		 * reference, instead of restarting the sweep.
++		 */
++		if (--focus_settle == 0)
++			best_sharp = stats->sharp;
++		return;
++	}
+ 	if (focus_phase >= PH_DONE) {
+ 		if (debug>1) printf("Phase %d, sharp %d best %d ", focus_phase, (int)(stats->sharp / 10000), (int)(best_sharp/ 10000));
+ 		focus_phase++;
+@@ -427,7 +451,7 @@ auto_focus_step(const struct focus_stats *stats)
+ 	}
+ 	if (focus_phase < PH_SWEEP) {
+ 		best_sharp = 0;
+-		focus = focus_inf;
++		focus = focus_inf();
+ 		focus_phase ++;
+ 		best_focus = 0;
+ 		if (debug>1) printf("...prepare\n");
+@@ -518,7 +542,7 @@ summarize()
+ 	gain *= state_proc.dgain.value / ((float) state_proc.dgain.min);
+ 
+ 	/* Focus */
+-	diopt = (state_proc.focus.value-focus_inf) / ((float) state_proc.focus.max-focus_inf);
++	diopt = (state_proc.focus.value-focus_inf()) / ((float) state_proc.focus.max-focus_inf());
+ 	diopt *= 30;
+ 
+ 	printf("1/%.0f sec, ISO %.0f, t=%f, g=%f %d %d, %.2f m\n",
+@@ -550,6 +574,14 @@ process_aaa()
+                 return;
+         }
+ 
++        /*
++         * Do not touch the sensor while a burst is being captured: the
++         * exposure and gain were fixed for it, and moving the lens blurs it.
++         */
++        if (state_proc.captures_remaining > 0) {
++                return;
++        }
++
+         int width = output_buffer_width;
+         int height = output_buffer_height / 3;
+         uint32_t *center = g_malloc_n(width * height * sizeof(uint32_t), 1);
+@@ -1408,6 +1440,7 @@ process_image(MPPipeline *pipeline, const MPBuffer *buffer)
+ 
+                 if (state_proc.captures_remaining == 0) {
+                         assert(thumb);
++                        focus_settle = 5;
+                         process_capture_burst(thumb);
+                 } else {
+                         assert(!thumb);
+-- 
+2.55.0
+

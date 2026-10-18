@@ -1,0 +1,44 @@
+# Forked from Alpine for temporary downstream patches
+# Contributor: Martijn Braam <martijn@brixit.nl>
+# Maintainer: japq7s <japiotr123@proton.me>
+pkgname=megapixels
+pkgver=2.1.0
+pkgrel=100
+pkgdesc="GTK+4 camera app for mobile devices"
+url="https://gitlab.com/megapixels-org/Megapixels"
+arch="all !s390x"
+license="GPL-3.0-only"
+# Required by postprocess.sh
+depends="libraw-tools imagemagick exiftool"
+makedepends="
+	feedbackd-dev
+	glib-dev
+	gperf
+	gtk4.0-dev
+	libdng-dev
+	libmegapixels-dev
+	libxrandr-dev
+	meson
+	pulseaudio-dev
+	tiff-dev>=4.6.0t
+	zbar-dev
+	"
+source="https://gitlab.com/megapixels-org/Megapixels/-/archive/$pkgver/Megapixels-$pkgver.tar.bz2
+	0001-keep-the-camera-settings-and-focus-during-a-capture.patch
+	"
+options="!check" # There's no testsuite
+builddir="$srcdir/Megapixels-$pkgver"
+
+build() {
+	abuild-meson . output
+	meson compile -C output
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install --no-rebuild -C output
+}
+
+sha512sums="
+0269e3d119abe3ae9a2a69e6796329429a8b54e8bb3f4928c62a54cef5c665abb152d55f0d9d07ab53cd81b397b0d7e81b3a1dff0f6f1b15a2713d5c0e193c88  Megapixels-2.1.0.tar.bz2
+6c2340313726945c9f7249640e5862e8995bbd6d7e8b33eae6511e0f2b5b5697056429145ff926a7fbb2541bfba2ac232d5be5a5270f1561cc8439977c7cf691  0001-keep-the-camera-settings-and-focus-during-a-capture.patch
+"
