@@ -1,0 +1,33 @@
+#!/bin/sh
+# Prepare the files hexagonrpcd serves to the SLPI (sensors): the sensor
+# registry with the factory calibration of this unit from the persist
+# partition, and the SLPI user libraries from the dsp partition. Both are
+# per device / proprietary, so they are copied at the first boot instead
+# of being packaged.
+set -eu
+
+dst=/var/lib/senna-sensors
+[ -e "$dst/.done" ] && exit 0
+
+mnt=$(mktemp -d)
+trap 'umount "$mnt" 2>/dev/null || true; rmdir "$mnt"' EXIT
+mkdir -p "$dst"
+
+mount -o ro /dev/disk/by-partlabel/persist "$mnt"
+rm -rf "$dst/registry"
+cp -a "$mnt/sensors/registry/registry" "$dst/registry"
+umount "$mnt"
+
+for part in dsp_a dsp_b; do
+	if mount -o ro "/dev/disk/by-partlabel/$part" "$mnt" 2>/dev/null; then
+		if [ -d "$mnt/sdsp" ]; then
+			rm -rf "$dst/sdsp"
+			cp -a "$mnt/sdsp" "$dst/sdsp"
+		fi
+		umount "$mnt"
+		[ -d "$dst/sdsp" ] && break
+	fi
+done
+[ -d "$dst/sdsp" ] || { echo "senna-sensors-setup: no sdsp libraries" >&2; exit 1; }
+
+touch "$dst/.done"

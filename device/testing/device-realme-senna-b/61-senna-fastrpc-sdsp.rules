@@ -1,0 +1,4 @@
+# The sensors on the SLPI are served by hexagonrpcd-sdsp (user fastrpc),
+# not by sdsprpcd of libfastrpc, which 60-fastrpc.rules starts for this
+# node with root ownership (the two fight over the SLPI listener).
+ACTION=="add", SUBSYSTEM=="misc", KERNEL=="fastrpc-sdsp", OWNER="fastrpc", GROUP="fastrpc", MODE="0660", ENV{SYSTEMD_WANTS}="hexagonrpcd-sdsp.service"

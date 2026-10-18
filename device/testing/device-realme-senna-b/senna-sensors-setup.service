@@ -1,0 +1,13 @@
+[Unit]
+Description=Sensor registry and SLPI libraries for hexagonrpcd
+ConditionPathExists=!/var/lib/senna-sensors/.done
+Before=hexagonrpcd-sdsp.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/senna-sensors-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

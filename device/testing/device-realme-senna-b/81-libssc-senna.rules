@@ -1,0 +1,5 @@
+# iio-sensor-proxy with libssc: accelerometer mount matrix. libssc reports
+# the Android convention (+g on the axis pointing up), iio-sensor-proxy
+# expects the opposite sign. It binds the SSC sensors to the first fastrpc
+# node it finds (fastrpc-adsp here), so match all of them.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-*", ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, -1, 0; 0, 0, -1"
