@@ -83,7 +83,10 @@ if [ -n "$DCRAW" ]; then
 	# -o 1		Output in sRGB colorspace
 	# -q 3		Debayer with AHD algorithm
 	# -T		Output TIFF
-	$DCRAW +M -H 4 -o 1 -q 3 -T "$@" "$MAIN_PICTURE.dng"
+	# -H 2 (blend) instead of 4 (rebuild): dcraw skips its automatic
+	# brightness in rebuild mode, which left the photos far darker than
+	# the preview.
+	$DCRAW +M -H 2 -o 1 -q 3 -T "$@" "$MAIN_PICTURE.dng"
 
 	# If imagemagick is available, convert the tiff to jpeg and apply slight sharpening
 	if [ -n "$CONVERT" ];
