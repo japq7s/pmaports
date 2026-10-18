@@ -31,4 +31,8 @@ algorithms:
                  -0.08752, -0.58718, 1.67469 ]
   - Adjust:
   - Agc:
+  # Contrast autofocus, AK7377 VCM: lens position 0 = infinity (measured),
+  # 1023 = macro. macroDioptres is approximate (LensPosition mapping only).
+  - Af:
+      macroDioptres: 10.0
 ...
