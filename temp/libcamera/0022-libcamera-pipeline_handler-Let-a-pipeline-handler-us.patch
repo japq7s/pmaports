@@ -1,0 +1,86 @@
+From 789419f01b3209cf9900b9b92b35a8e099e41ada Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 18:28:36 +0200
+Subject: [PATCH 22/23] libcamera: pipeline_handler: Let a pipeline handler use
+ another's IPA
+
+IPA modules are matched by the name of the pipeline handler they are
+for. A pipeline handler that drives the soft IPA of the simple pipeline
+handler, as the camss one does, then finds no module.
+
+Add PipelineHandler::ipaName(), the name IPA modules are matched
+against, which defaults to the pipeline handler's own name and can be
+set through ipaName_.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ include/libcamera/internal/pipeline_handler.h |  3 +++
+ src/libcamera/ipa_module.cpp                  |  2 +-
+ src/libcamera/pipeline_handler.cpp            | 17 +++++++++++++++++
+ 3 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/include/libcamera/internal/pipeline_handler.h b/include/libcamera/internal/pipeline_handler.h
+index 675bd0c..48290c5 100644
+--- a/include/libcamera/internal/pipeline_handler.h
++++ b/include/libcamera/internal/pipeline_handler.h
+@@ -69,6 +69,7 @@ public:
+ 				      bool silent = false) const;
+ 
+ 	const char *name() const { return name_; }
++	const char *ipaName() const { return ipaName_ ? ipaName_ : name_; }
+ 
+ 	CameraManager *cameraManager() const { return manager_; }
+ 
+@@ -93,6 +94,8 @@ protected:
+ 	CameraManager *manager_;
+ 	const unsigned int maxQueuedRequestsDevice_;
+ 	bool lockOnAcquire_;
++	/* The pipeline handler whose IPA modules this one uses, if not its own */
++	const char *ipaName_ = nullptr;
+ 
+ private:
+ 	void unlockMediaDevices();
+diff --git a/src/libcamera/ipa_module.cpp b/src/libcamera/ipa_module.cpp
+index e6ea61e..08339fc 100644
+--- a/src/libcamera/ipa_module.cpp
++++ b/src/libcamera/ipa_module.cpp
+@@ -477,7 +477,7 @@ bool IPAModule::match(PipelineHandler *pipe,
+ {
+ 	return info_.pipelineVersion >= minVersion &&
+ 	       info_.pipelineVersion <= maxVersion &&
+-	       !strcmp(info_.pipelineName, pipe->name());
++	       !strcmp(info_.pipelineName, pipe->ipaName());
+ }
+ 
+ std::string IPAModule::logPrefix() const
+diff --git a/src/libcamera/pipeline_handler.cpp b/src/libcamera/pipeline_handler.cpp
+index b123123..deff122 100644
+--- a/src/libcamera/pipeline_handler.cpp
++++ b/src/libcamera/pipeline_handler.cpp
+@@ -822,6 +822,23 @@ void PipelineHandler::disconnect()
+  * \return The pipeline handler name
+  */
+ 
++/**
++ * \fn PipelineHandler::ipaName()
++ * \brief Retrieve the name IPA modules are matched against
++ *
++ * A pipeline handler may use the IPA modules of another one, by setting
++ * ipaName_ to the name of that pipeline handler.
++ *
++ * \return The name of the pipeline handler whose IPA modules this one uses
++ */
++
++/**
++ * \var PipelineHandler::ipaName_
++ * \brief The name of the pipeline handler whose IPA modules to use
++ *
++ * Defaults to nullptr, the pipeline handler's own name().
++ */
++
+ /**
+  * \fn PipelineHandler::useCount()
+  * \brief Retrieve the pipeline handler's used camera count
+-- 
+2.55.0
+
