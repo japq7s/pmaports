@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=32
+pkgrel=33
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -92,6 +92,7 @@ source="
 	senna-touch-blacklist.conf
 	libcamera-imx355.yaml
 	libcamera-imx890.yaml
+	libcamera-softisp-imx890.yaml
 	millipixels.ini
 	megapixels.conf
 	megapixels-Rear.dcp
@@ -177,6 +178,10 @@ package() {
 		"$pkgdir"/etc/libcamera/ipa/simple/imx355.yaml
 	install -Dm644 "$srcdir"/libcamera-imx890.yaml \
 		"$pkgdir"/etc/libcamera/ipa/simple/imx890.yaml
+	install -Dm644 "$srcdir"/libcamera-imx355.yaml \
+		"$pkgdir"/etc/libcamera/ipa/softisp/imx355.yaml
+	install -Dm644 "$srcdir"/libcamera-softisp-imx890.yaml \
+		"$pkgdir"/etc/libcamera/ipa/softisp/imx890.yaml
 	# Millipixels looks its camera config up by the DT compatible.
 	install -Dm644 "$srcdir"/millipixels.ini \
 		"$pkgdir"/usr/share/millipixels/config/realme,senna-b.ini
@@ -294,6 +299,7 @@ a719187894378c61f47763aae75a3b1e94b403bb1c6f91608c9056838dc7ee3b829c68301862db6c
 1a039c2e7414646568c187d25cc441ec118f0281b6840c6aee88fcc9ced427f1852d641286fd0e2ed35a82e1abab7ccce6f968d4a56192fab678540b7b70c320  senna-touch-blacklist.conf
 7d909efcc7135ab4f1a4a86cfbf21ed14b9f873a2f5d76b3be7138d7bfc24d2603e2f7f6b961464ab1373869d836bd4fa186d0347d93d35b2e6ddba0ab2c26c6  libcamera-imx355.yaml
 82cdc6b6d1fd3a56f46bff10b272b47a557730d9ea70ca6ee1b9a3f9c9a524a9b6aff4b902960672adecfc876f803c2ffc2affbc23b2ab82934b3053cf5b9923  libcamera-imx890.yaml
+398761692b0c1161b823dc2d5df8f2cebe6e06510ed631358f4dc414908ef87cc052cf18ca4fd38c531c4d0594d2efaa7379064ad3ba3ee52ec8bb5c58aa2cee  libcamera-softisp-imx890.yaml
 a58e7e08c1b88c300e3142acbc59bf7dd835d3140c1631ee265459bd952f4eb305551a2ded9fb5fa25217aa1f8988b517601a23d5f6515e0efa6e29b5b368789  millipixels.ini
 3a68c0a3b92213c8caf4c8069f9ab8a874d8de41d953e344d66e5fdea4bc2c4b9a62f3d41a8e80e5362f890c3d104f74c72659a4c2e0da9b9e7ebe5288eb2a6d  megapixels.conf
 8c0b1d929a31ecba5afa8b0bb8db1035abd9e0275f92a96938d14b7e0773622d5bff5fac2bab581fcc7d0bbaa84358df11d3975c3daa058ea4ffedf368a01e2a  megapixels-Rear.dcp
