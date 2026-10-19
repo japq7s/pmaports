@@ -1,0 +1,185 @@
+From 8a7fb4b96dc7b9357cf50cf01a5fe3019e5511d5 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 19:45:19 +0200
+Subject: [PATCH 28/28] pipeline: camss: Downscale with the IFE pixel line
+
+The kernel now programs the downscaler of the VFE pixel line from the
+compose rectangle of its sink pad and the crop of its source pad. Offer
+NV12 at any size down to an eighth of the sensor mode, width a multiple
+of 16, scale the sensor frame to cover the requested size with its
+aspect ratio kept and crop the centre.
+
+Viewfinders default to 1920x1080 downscaled from the full width
+4096x2304 mode of the IMX890, instead of 9 megapixel frames that
+applications could not convert at 30 fps.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss.cpp        |  7 +-
+ src/libcamera/pipeline/camss/camss_csi.cpp    |  4 +-
+ .../pipeline/camss/camss_isp_ife.cpp          | 84 ++++++++++++++++---
+ 3 files changed, 79 insertions(+), 16 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
+index 1b5a6c8..39ac831 100644
+--- a/src/libcamera/pipeline/camss/camss.cpp
++++ b/src/libcamera/pipeline/camss/camss.cpp
+@@ -341,9 +341,10 @@ PipelineHandlerCamss::generateConfiguration(Camera *camera, Span<const StreamRol
+ 			return nullptr;
+ 
+ 		/*
+-		 * Without a scaler an inline ISP streams at the sensor output
+-		 * size: default to a small sensor mode unless capturing stills.
+-		 * validate() picks the mode.
++		 * An inline ISP streams what the line outputs: default to a
++		 * size an application can take at the frame rate, downscaled
++		 * from the sensor mode validate() picks, unless capturing
++		 * stills.
+ 		 */
+ 		if (data->isp_->isInline() && !stillRequested)
+ 			cfg.size = CamssCameraConfiguration::kInlineViewfinderSize;
+diff --git a/src/libcamera/pipeline/camss/camss_csi.cpp b/src/libcamera/pipeline/camss/camss_csi.cpp
+index 6ca8ed4..1ec6e24 100644
+--- a/src/libcamera/pipeline/camss/camss_csi.cpp
++++ b/src/libcamera/pipeline/camss/camss_csi.cpp
+@@ -147,8 +147,8 @@ V4L2SubdeviceFormat CamssCsiCamera::getSensorFormat(Size size,
+ 		size = resolution;
+ 
+ 	/*
+-	 * An inline ISP has no scaler: the sensor output is the stream, so
+-	 * match the aspect ratio that is asked for, not the native one.
++	 * An inline ISP scales the sensor output as a whole: match the
++	 * aspect ratio that is asked for, not the native one.
+ 	 */
+ 	if (isp_ && isp_->isInline()) {
+ 		desiredRatio = static_cast<float>(size.width) / size.height;
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 5e59217..608aebf 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -14,6 +14,7 @@
+ #include <linux/v4l2-controls.h>
+ 
+ #include <libcamera/base/log.h>
++#include <libcamera/base/utils.h>
+ 
+ #include <libcamera/control_ids.h>
+ #include <libcamera/controls.h>
+@@ -55,6 +56,51 @@ const std::map<PixelFormat, uint32_t> inputFormatToMediaBus = {
+ constexpr unsigned int kPixPadSink = 0;
+ constexpr unsigned int kPixPadSrc = 1;
+ 
++/*
++ * The line's MN downscaler: the output width is written in multiples of 16
++ * pixels, and at most 8 times smaller than the sensor output, for the
++ * chroma scaler to stay within 16.
++ */
++constexpr unsigned int kScaleMax = 8;
++constexpr unsigned int kWidthAlign = 16;
++
++Size minOutputSize(const Size &raw)
++{
++	return Size(utils::alignUp((raw.width + kScaleMax - 1) / kScaleMax, kWidthAlign),
++		    utils::alignUp((raw.height + kScaleMax - 1) / kScaleMax, 2));
++}
++
++Size outputSize(const Size &raw, const Size &req)
++{
++	if (req.isNull())
++		return raw;
++
++	Size min = minOutputSize(raw);
++	Size size(std::clamp(req.width, min.width, raw.width),
++		  std::clamp(req.height, min.height, raw.height));
++
++	return Size(utils::alignDown(size.width, kWidthAlign),
++		    utils::alignDown(size.height, 2));
++}
++
++/*
++ * Scale the sensor frame to cover the output with its aspect ratio kept,
++ * then crop the centre: the compose and crop rectangles of the line.
++ */
++void scalerRects(const Size &raw, const Size &out, Rectangle *compose, Rectangle *crop)
++{
++	double s = std::max(static_cast<double>(out.width) / raw.width,
++			    static_cast<double>(out.height) / raw.height);
++	Size scaled(std::min(utils::alignUp(static_cast<unsigned int>(std::ceil(raw.width * s)), 2),
++			     raw.width),
++		    std::min(utils::alignUp(static_cast<unsigned int>(std::ceil(raw.height * s)), 2),
++			     raw.height));
++
++	*compose = Rectangle(scaled);
++	*crop = Rectangle(((scaled.width - out.width) / 2) & ~1u,
++			  ((scaled.height - out.height) / 2) & ~1u, out);
++}
++
+ /* Statistics sample every kStatsStep pixels of the central 2/3 of the frame */
+ constexpr unsigned int kStatsStep = 4;
+ 
+@@ -217,15 +263,9 @@ StreamConfiguration CamssIspIfe::generateConfiguration(const StreamConfiguration
+ 		return {};
+ 	}
+ 
+-	/* No scaler on the line: NV12 at the sizes of the sensor modes */
+-	std::vector<SizeRange> sizes;
+-	for (const Size &size : sensor_->sizes(inputFormatToMediaBus.at(raw.pixelFormat)))
+-		sizes.emplace_back(size);
+-	if (sizes.empty())
+-		sizes.emplace_back(raw.size);
+-
++	/* The line downscales the sensor output */
+ 	std::map<PixelFormat, std::vector<SizeRange>> formats = {
+-		{ formats::NV12, sizes },
++		{ formats::NV12, { SizeRange(minOutputSize(raw.size), raw.size, kWidthAlign, 2) } },
+ 	};
+ 
+ 	StreamConfiguration cfg{ StreamFormats{ formats } };
+@@ -244,7 +284,7 @@ StreamConfiguration CamssIspIfe::validate(const StreamConfiguration &raw,
+ 
+ 	StreamConfiguration cfg;
+ 	cfg.pixelFormat = formats::NV12;
+-	cfg.size = raw.size;
++	cfg.size = outputSize(raw.size, req.size);
+ 
+ 	V4L2DeviceFormat format;
+ 	format.fourcc = output_->toV4L2PixelFormat(cfg.pixelFormat);
+@@ -295,11 +335,33 @@ int CamssIspIfe::configure(const StreamConfiguration &inputCfg,
+ 	if (ret)
+ 		return ret;
+ 
++	Rectangle compose, crop;
++	scalerRects(inputCfg.size, outputCfg.size, &compose, &crop);
++
++	Rectangle rect = compose;
++	ret = pix_->setSelection(kPixPadSink, V4L2_SEL_TGT_COMPOSE, &rect);
++	if (ret || rect != compose) {
++		LOG(Camss, Error) << "IFE compose " << compose << " got " << rect;
++		return ret ? ret : -EINVAL;
++	}
++
++	rect = crop;
++	ret = pix_->setSelection(kPixPadSrc, V4L2_SEL_TGT_CROP, &rect);
++	if (ret || rect != crop) {
++		LOG(Camss, Error) << "IFE crop " << crop << " got " << rect;
++		return ret ? ret : -EINVAL;
++	}
++
+ 	format.code = MEDIA_BUS_FMT_YUYV8_1_5X8;
+ 	format.size = outputCfg.size;
+ 	ret = pix_->setFormat(kPixPadSrc, &format);
+-	if (ret)
+-		return ret;
++	if (ret || format.size != outputCfg.size) {
++		LOG(Camss, Error) << "IFE source format " << format.size;
++		return ret ? ret : -EINVAL;
++	}
++
++	LOG(Camss, Debug) << "IFE scales " << inputCfg.size << " to " << compose
++			  << ", crops " << crop;
+ 
+ 	V4L2DeviceFormat outputFormat;
+ 	outputFormat.fourcc = output_->toV4L2PixelFormat(outputCfg.pixelFormat);
+-- 
+2.55.0
+
