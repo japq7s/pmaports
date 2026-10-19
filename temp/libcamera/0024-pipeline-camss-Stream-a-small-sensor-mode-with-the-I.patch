@@ -1,0 +1,199 @@
+From 5a4abaefe539151334ae8be0bc40692ac2d0c34b Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 18:36:33 +0200
+Subject: [PATCH 24/24] pipeline: camss: Stream a small sensor mode with the
+ IFE, cancel at stop
+
+The IFE line has no scaler, so the stream is the sensor output. The
+sensor format selection preferred the native aspect ratio, which for
+any viewfinder size picked the full 4096x3072 mode of the IMX890: 12
+megapixel frames at 30 fps, too much for an application converting them
+on the CPU, which dropped frames.
+
+With an inline ISP, match the requested aspect ratio, advertise the
+sensor mode sizes and default viewfinder and video streams to 1280x720,
+which selects the 1296x736 mode. Still capture keeps the full size.
+
+Stopping a camera asserted on requests still queued: requests waiting
+for parameters or metadata from the IPA were never completed. Cancel
+whatever is still tracked once the devices are stopped, and ignore IPA
+metadata for frames that are gone.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss.cpp        | 17 +++++++++++++-
+ src/libcamera/pipeline/camss/camss_csi.cpp    |  9 ++++++++
+ src/libcamera/pipeline/camss/camss_frames.cpp | 22 +++++++++++++++++++
+ src/libcamera/pipeline/camss/camss_frames.h   |  3 +++
+ .../pipeline/camss/camss_isp_ife.cpp          | 12 ++++++++--
+ 5 files changed, 60 insertions(+), 3 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
+index 7309832..8da91ce 100644
+--- a/src/libcamera/pipeline/camss/camss.cpp
++++ b/src/libcamera/pipeline/camss/camss.cpp
+@@ -75,6 +75,7 @@ class CamssCameraConfiguration : public CameraConfiguration
+ public:
+ 	static constexpr unsigned int kBufferCount = 4;
+ 	static constexpr unsigned int kMaxStreams = 2;
++	static constexpr Size kInlineViewfinderSize = Size(1280, 720);
+ 
+ 	CamssCameraConfiguration(CamssCameraData *data);
+ 	Status validate() override;
+@@ -321,11 +322,14 @@ PipelineHandlerCamss::generateConfiguration(Camera *camera, Span<const StreamRol
+ 
+ 	bool processedRequested = false;
+ 	bool rawRequested = false;
++	bool stillRequested = false;
+ 	for (const auto &role : roles) {
+ 		if (role == StreamRole::Raw)
+ 			rawRequested = true;
+ 		else
+ 			processedRequested = true;
++		if (role == StreamRole::StillCapture)
++			stillRequested = true;
+ 	}
+ 
+ 	if (rawRequested)
+@@ -336,6 +340,14 @@ PipelineHandlerCamss::generateConfiguration(Camera *camera, Span<const StreamRol
+ 		if (!cfg.pixelFormat.isValid())
+ 			return nullptr;
+ 
++		/*
++		 * Without a scaler an inline ISP streams at the sensor output
++		 * size: default to a small sensor mode unless capturing stills.
++		 * validate() picks the mode.
++		 */
++		if (data->isp_->isInline() && !stillRequested)
++			cfg.size = CamssCameraConfiguration::kInlineViewfinderSize;
++
+ 		LOG(Camss, Debug) << "Generated ISP cfg " << cfg;
+ 		config->addConfiguration(cfg);
+ 	}
+@@ -451,6 +463,8 @@ void PipelineHandlerCamss::stopDevice(Camera *camera)
+ 	if (!data->isp_->isInline())
+ 		data->csi_->stop();
+ 
++	data->frameInfos_.cancelAll(this);
++
+ 	freeBuffers(camera);
+ }
+ 
+@@ -620,7 +634,8 @@ void CamssCameraData::setSensorControls(const ControlList &sensorControls)
+ 
+ void CamssCameraData::metadataReady(unsigned int id, const ControlList &metadata)
+ {
+-	CamssFrames::Info *info = frameInfos_.find(id);
++	/* The IPA may still answer for a frame cancelled at stop */
++	CamssFrames::Info *info = frameInfos_.tryFind(id);
+ 	if (!info)
+ 		return;
+ 
+diff --git a/src/libcamera/pipeline/camss/camss_csi.cpp b/src/libcamera/pipeline/camss/camss_csi.cpp
+index 2af54d2..15119c7 100644
+--- a/src/libcamera/pipeline/camss/camss_csi.cpp
++++ b/src/libcamera/pipeline/camss/camss_csi.cpp
+@@ -146,6 +146,15 @@ V4L2SubdeviceFormat CamssCsiCamera::getSensorFormat(Size size,
+ 	if (size.isNull())
+ 		size = resolution;
+ 
++	/*
++	 * An inline ISP has no scaler: the sensor output is the stream, so
++	 * match the aspect ratio that is asked for, not the native one.
++	 */
++	if (isp_ && isp_->isInline()) {
++		desiredRatio = static_cast<float>(size.width) / size.height;
++		desiredArea = size.width * size.height;
++	}
++
+ 	if (format.isValid())
+ 		desiredCode = PixelFormatToMbusCode(format);
+ 
+diff --git a/src/libcamera/pipeline/camss/camss_frames.cpp b/src/libcamera/pipeline/camss/camss_frames.cpp
+index 3daaaff..cb35053 100644
+--- a/src/libcamera/pipeline/camss/camss_frames.cpp
++++ b/src/libcamera/pipeline/camss/camss_frames.cpp
+@@ -135,6 +135,28 @@ CamssFrames::Info *CamssFrames::find(unsigned int id)
+ 	return nullptr;
+ }
+ 
++/* As find(), for frames that may already be gone */
++CamssFrames::Info *CamssFrames::tryFind(unsigned int id)
++{
++	const auto &itInfo = frameInfo_.find(id);
++
++	return itInfo != frameInfo_.end() ? &itInfo->second : nullptr;
++}
++
++/*
++ * Cancel the requests still tracked once the devices stopped: their
++ * parameters or metadata may never come, so they would not complete.
++ */
++void CamssFrames::cancelAll(PipelineHandler *pipe)
++{
++	while (!frameInfo_.empty()) {
++		Request *request = frameInfo_.begin()->second.request;
++
++		remove(&frameInfo_.begin()->second);
++		pipe->cancelRequest(request);
++	}
++}
++
+ CamssFrames::Info *CamssFrames::find(FrameBuffer *buffer)
+ {
+ 	for (auto &[id, info] : frameInfo_) {
+diff --git a/src/libcamera/pipeline/camss/camss_frames.h b/src/libcamera/pipeline/camss/camss_frames.h
+index 936b907..747bfd2 100644
+--- a/src/libcamera/pipeline/camss/camss_frames.h
++++ b/src/libcamera/pipeline/camss/camss_frames.h
+@@ -22,6 +22,7 @@
+ namespace libcamera {
+ 
+ class FrameBuffer;
++class PipelineHandler;
+ class Request;
+ 
+ class CamssFrames
+@@ -53,6 +54,8 @@ public:
+ 	bool tryComplete(Info *info);
+ 
+ 	Info *find(unsigned int id);
++	Info *tryFind(unsigned int id);
++	void cancelAll(PipelineHandler *pipe);
+ 	Info *find(FrameBuffer *buffer);
+ 
+ 	Signal<> bufferAvailable;
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 6e3bb38..76a6e0f 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -217,9 +217,15 @@ StreamConfiguration CamssIspIfe::generateConfiguration(const StreamConfiguration
+ 		return {};
+ 	}
+ 
+-	/* No scaler on the line: NV12 at the sensor output size */
++	/* No scaler on the line: NV12 at the sizes of the sensor modes */
++	std::vector<SizeRange> sizes;
++	for (const Size &size : sensor_->sizes(inputFormatToMediaBus.at(raw.pixelFormat)))
++		sizes.emplace_back(size);
++	if (sizes.empty())
++		sizes.emplace_back(raw.size);
++
+ 	std::map<PixelFormat, std::vector<SizeRange>> formats = {
+-		{ formats::NV12, { SizeRange(raw.size) } },
++		{ formats::NV12, sizes },
+ 	};
+ 
+ 	StreamConfiguration cfg{ StreamFormats{ formats } };
+@@ -638,6 +644,8 @@ int CamssIspIfe::start()
+ 
+ void CamssIspIfe::stop()
+ {
++	/* Parameters still being computed are for requests cancelled below */
++	pendingParams_ = {};
+ 	output_->streamOff();
+ 	params_->streamOff();
+ 	ipa_->stop();
+-- 
+2.55.0
+

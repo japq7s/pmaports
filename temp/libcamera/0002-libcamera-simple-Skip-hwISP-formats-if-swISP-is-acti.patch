@@ -1,7 +1,7 @@
 From a8cbd4a1113315d6cb046df00b76b4d205d662e1 Mon Sep 17 00:00:00 2001
 From: Robert Mader <robert.mader@collabora.com>
 Date: Mon, 6 May 2024 21:21:57 +0200
-Subject: [PATCH 02/23] libcamera: simple: Skip hwISP formats if swISP is
+Subject: [PATCH 02/24] libcamera: simple: Skip hwISP formats if swISP is
  active
 
 On devices like the Pinephone libcamera will advertise support for
