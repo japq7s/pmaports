@@ -1,0 +1,107 @@
+From 4c2c3ebd374f462e2e583d26a27f40bb26c9981e Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 19:05:11 +0200
+Subject: [PATCH 27/27] pipeline: camss: Disable the camera's links when it is
+ released
+
+The links the camss pipeline handler enables stay enabled after the
+camera is released. A CSI phy has a single source pad, so another user
+of the media graph that links the same phy to another decoder, as
+Megapixels does for its raw path, then gets -EBUSY and cannot start
+until the links are reset by hand.
+
+Disable the CSI side links and the decoder to pixel line link when the
+camera is released; configure() enables them again.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss.cpp         |  1 +
+ src/libcamera/pipeline/camss/camss_csi.cpp     | 11 +++++++++++
+ src/libcamera/pipeline/camss/camss_isp.h       |  2 ++
+ src/libcamera/pipeline/camss/camss_isp_ife.cpp | 10 ++++++++++
+ src/libcamera/pipeline/camss/camss_isp_ife.h   |  1 +
+ 5 files changed, 25 insertions(+)
+
+diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
+index d5ed669..1b5a6c8 100644
+--- a/src/libcamera/pipeline/camss/camss.cpp
++++ b/src/libcamera/pipeline/camss/camss.cpp
+@@ -416,6 +416,7 @@ void PipelineHandlerCamss::releaseDevice(Camera *camera)
+ {
+ 	CamssCameraData *data = cameraData(camera);
+ 
++	data->isp_->release();
+ 	data->csi_->releaseDevice();
+ }
+ 
+diff --git a/src/libcamera/pipeline/camss/camss_csi.cpp b/src/libcamera/pipeline/camss/camss_csi.cpp
+index 15119c7..6ca8ed4 100644
+--- a/src/libcamera/pipeline/camss/camss_csi.cpp
++++ b/src/libcamera/pipeline/camss/camss_csi.cpp
+@@ -367,6 +367,17 @@ bool CamssCsiCamera::acquireDevice()
+ 
+ void CamssCsiCamera::releaseDevice()
+ {
++	/*
++	 * A CSI phy has a single source pad: a link left enabled keeps any
++	 * other user of the media graph, such as Megapixels, from linking it.
++	 */
++	for (auto &link : links_) {
++		unsigned int flags = link.link->flags();
++
++		if ((flags & MEDIA_LNK_FL_ENABLED) && !(flags & MEDIA_LNK_FL_IMMUTABLE))
++			link.link->setEnabled(false);
++	}
++
+ 	for (auto &link : links_)
+ 		link.sinkSubdev->unlock();
+ }
+diff --git a/src/libcamera/pipeline/camss/camss_isp.h b/src/libcamera/pipeline/camss/camss_isp.h
+index a03155f..ed435fc 100644
+--- a/src/libcamera/pipeline/camss/camss_isp.h
++++ b/src/libcamera/pipeline/camss/camss_isp.h
+@@ -31,6 +31,8 @@ public:
+ 	virtual bool isValid() = 0;
+ 	/* Processes the live stream: no raw buffer goes through the CSI side */
+ 	virtual bool isInline() const { return false; }
++	/* Undo what configure() set up outside the ISP, once the camera is released */
++	virtual void release() {}
+ 	virtual Size getMargins(PixelFormat inputFormat) = 0;
+ 
+ 	virtual StreamConfiguration generateConfiguration(const StreamConfiguration &raw) const = 0;
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 7b5dc00..5e59217 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -321,6 +321,16 @@ int CamssIspIfe::configure(const StreamConfiguration &inputCfg,
+ 	return 0;
+ }
+ 
++/*
++ * Leave the CSI decoder free for other users of the media graph, which do
++ * not expect links left enabled by a released camera.
++ */
++void CamssIspIfe::release()
++{
++	if (csidPixLink_->flags() & MEDIA_LNK_FL_ENABLED)
++		csidPixLink_->setEnabled(false);
++}
++
+ int CamssIspIfe::allocateBuffers(unsigned int bufferCount)
+ {
+ 	int ret = output_->importBuffers(outputBufferCount_);
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.h b/src/libcamera/pipeline/camss/camss_isp_ife.h
+index 377362f..899d000 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.h
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.h
+@@ -56,6 +56,7 @@ public:
+ 
+ 	bool isValid() override;
+ 	bool isInline() const override { return true; }
++	void release() override;
+ 	Size getMargins(PixelFormat inputFormat) override;
+ 
+ 	StreamConfiguration generateConfiguration(const StreamConfiguration &raw) const override;
+-- 
+2.55.0
+

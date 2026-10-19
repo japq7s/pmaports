@@ -1,7 +1,7 @@
 From ba58d7d8ed06ead3eaa62e85028136b3d847e047 Mon Sep 17 00:00:00 2001
 From: Robert Mader <robert.mader@collabora.com>
 Date: Thu, 23 Jul 2026 09:19:33 +0200
-Subject: [PATCH 03/26] software_isp: debayer_egl: Re-add log for failing
+Subject: [PATCH 03/27] software_isp: debayer_egl: Re-add log for failing
  DMABuf import
 
 The log was introduced in commit

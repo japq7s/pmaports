@@ -1,7 +1,7 @@
 From 35cb0870a4181c1e5f26ede717801e20bafa449f Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 18:18:52 +0200
-Subject: [PATCH 20/26] include: linux: Update qcom-camss-config.h for the IFE
+Subject: [PATCH 20/27] include: linux: Update qcom-camss-config.h for the IFE
 
 Sync the parameters part with the kernel uAPI of the CAMSS IFE pixel
 path, which adds the AEC Bayer histogram parameters block and sizes the

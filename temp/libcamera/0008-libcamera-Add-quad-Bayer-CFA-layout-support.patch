@@ -1,7 +1,7 @@
 From fe24fc7d875e422067a84793a5cb804e89ab54d3 Mon Sep 17 00:00:00 2001
 From: Frederic Laing <dev@fredfunk.tech>
 Date: Tue, 25 Aug 2026 18:16:06 +0000
-Subject: [PATCH 08/26] libcamera: Add quad-Bayer CFA layout support
+Subject: [PATCH 08/27] libcamera: Add quad-Bayer CFA layout support
 
 Quad-Bayer sensors arrange pixels in 2x2 same-colour cells. Treating
 the IMX371 full-resolution stream as a conventional Bayer pattern
