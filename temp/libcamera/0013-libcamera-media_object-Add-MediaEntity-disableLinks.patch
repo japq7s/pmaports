@@ -1,7 +1,7 @@
 From 65b7009cfe59dfb006ccb7fa8bfd91d8a315cdfb Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Fri, 3 Apr 2026 16:20:38 +0200
-Subject: [PATCH 13/25] libcamera: media_object: Add
+Subject: [PATCH 13/26] libcamera: media_object: Add
  MediaEntity::disableLinks()
 
 Some pipeline-handlers may want finer-grained control over disabling

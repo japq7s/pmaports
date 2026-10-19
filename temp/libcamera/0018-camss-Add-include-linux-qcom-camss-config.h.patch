@@ -1,7 +1,7 @@
 From 5068e0f449e2c8a51dca8496d03dc67dba75951e Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Sat, 2 May 2026 14:54:54 +0200
-Subject: [PATCH 18/25] camss: Add include/linux/qcom-camss-config.h
+Subject: [PATCH 18/26] camss: Add include/linux/qcom-camss-config.h
 
 Add include/linux/qcom-camss-config.h for OPE ISP parameter definitions.
 

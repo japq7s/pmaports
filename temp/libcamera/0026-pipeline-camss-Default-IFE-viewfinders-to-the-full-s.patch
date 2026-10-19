@@ -1,0 +1,32 @@
+From 8a831970e3f98be293edc68aeee2405d4458c37e Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 18:56:18 +0200
+Subject: [PATCH 26/26] pipeline: camss: Default IFE viewfinders to the full
+ sensor width
+
+The 1296x736 mode of the IMX890 is a centre crop of the array, so the
+1280x720 default looked zoomed in. Default viewfinder and video streams
+to 1920x1080, which selects the full width 4096x2304 mode, until the
+pixel line can scale.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
+index 8da91ce..d5ed669 100644
+--- a/src/libcamera/pipeline/camss/camss.cpp
++++ b/src/libcamera/pipeline/camss/camss.cpp
+@@ -75,7 +75,7 @@ class CamssCameraConfiguration : public CameraConfiguration
+ public:
+ 	static constexpr unsigned int kBufferCount = 4;
+ 	static constexpr unsigned int kMaxStreams = 2;
+-	static constexpr Size kInlineViewfinderSize = Size(1280, 720);
++	static constexpr Size kInlineViewfinderSize = Size(1920, 1080);
+ 
+ 	CamssCameraConfiguration(CamssCameraData *data);
+ 	Status validate() override;
+-- 
+2.55.0
+
