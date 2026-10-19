@@ -1,0 +1,315 @@
+From b2da6ec57b96d68ce9e740a5b568a8335eefe313 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Sun, 18 Oct 2026 14:30:05 +0200
+Subject: [PATCH 10/21] libcamera: software_isp: Add a focus measure to the
+ statistics
+
+The software ISP statistics only carry channel sums and a luminance
+histogram, nothing that says how sharp the image is, so contrast
+detection autofocus has nothing to work with.
+
+Accumulate the sum of the squared differences of horizontally adjacent
+luminance samples in the centre third of the statistics window, with the
+sum and number of the samples so that the measure can be normalised by
+the mean brightness. It is computed in the existing sampling loop, at
+the cost of a subtraction, a multiplication and a few additions per
+sample in the window. The quad-Bayer path gets the same measure.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../internal/software_isp/swisp_stats.h       | 13 ++++
+ .../internal/software_isp/swstats_cpu.h       | 28 +++++----
+ src/libcamera/software_isp/swstats_cpu.cpp    | 62 +++++++++++++++----
+ 3 files changed, 80 insertions(+), 23 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index d9d0d9b..35232a6 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -43,6 +43,19 @@ struct SwIspStats {
+ 	 * \brief A histogram of luminance values of all the sampled pixels
+ 	 */
+ 	Histogram yHistogram;
++	/**
++	 * \brief Sum of the squared differences of horizontally adjacent
++	 * luminance samples in the focus window
++	 */
++	uint64_t focusSquares;
++	/**
++	 * \brief Sum of the luminance samples in the focus window
++	 */
++	uint64_t focusSum;
++	/**
++	 * \brief Number of luminance samples in the focus window
++	 */
++	uint32_t focusCount;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu.h b/include/libcamera/internal/software_isp/swstats_cpu.h
+index 6fe60e6..afefc1a 100644
+--- a/include/libcamera/internal/software_isp/swstats_cpu.h
++++ b/include/libcamera/internal/software_isp/swstats_cpu.h
+@@ -67,7 +67,7 @@ public:
+ 		    y >= (window_.y + window_.height))
+ 			return;
+ 
+-		(this->*stats0_)(src, stats_[statsBufferIndex]);
++		(this->*stats0_)(src, isFocusLine(y - window_.y), stats_[statsBufferIndex]);
+ 	}
+ 
+ 	void processLine2(uint32_t frame, unsigned int y, const uint8_t *src[], unsigned int statsBufferIndex = 0)
+@@ -79,29 +79,35 @@ public:
+ 		    y >= (window_.y + window_.height))
+ 			return;
+ 
+-		(this->*stats2_)(src, stats_[statsBufferIndex]);
++		(this->*stats2_)(src, isFocusLine(y - window_.y), stats_[statsBufferIndex]);
+ 	}
+ 
+ 	Signal<uint32_t, uint32_t> statsReady;
+ 
+ private:
+-	using statsProcessFn = void (SwStatsCpu::*)(const uint8_t *src[], SwIspStats &stats);
++	using statsProcessFn = void (SwStatsCpu::*)(const uint8_t *src[], bool focusLine, SwIspStats &stats);
+ 	using processFrameFn = void (SwStatsCpu::*)(MappedFrameBuffer &in);
+ 
++	/* The focus window is the centre third of the statistics window. */
++	bool isFocusLine(unsigned int y) const
++	{
++		return y >= window_.height / 3 && y < window_.height * 2 / 3;
++	}
++
+ 	int setupStandardBayerOrder(BayerFormat::Order order);
+ 	/* Bayer 8 bpp unpacked */
+-	void statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR8Line0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
+ 	/* Bayer 10 bpp unpacked */
+-	void statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR10Line0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
+ 	/* Bayer 12 bpp unpacked */
+-	void statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR12Line0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
+ 	/* Bayer 10 bpp packed */
+-	void statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats);
+-	void statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats);
+-	void statsQuadRGGB10P(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR10PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
++	void statsGBRG10PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
++	void statsQuadRGGB10P(const uint8_t *src[], bool focusLine, SwIspStats &stats);
+ 	/* Bayer 12 bpp packed */
+-	void statsBGGR12PLine0(const uint8_t *src[], SwIspStats &stats);
+-	void statsGBRG12PLine0(const uint8_t *src[], SwIspStats &stats);
++	void statsBGGR12PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
++	void statsGBRG12PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats);
+ 
+ 	void processBayerFrame2(MappedFrameBuffer &in);
+ 	void processQuadBayerFrame(MappedFrameBuffer &in);
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index 0d33594..d75a592 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -178,7 +178,11 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+                                           \
+ 	uint64_t sumR = 0;                \
+ 	uint64_t sumG = 0;                \
+-	uint64_t sumB = 0;
++	uint64_t sumB = 0;                \
++	uint64_t focusSquares = 0;        \
++	uint64_t focusSum = 0;            \
++	uint32_t focusCount = 0;          \
++	int64_t yPrev = -1;
+ 
+ #define SWSTATS_ACCUMULATE_LINE_STATS(div) \
+ 	sumR += r;                         \
+@@ -190,12 +194,29 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	yVal += b * kBlueYMul;             \
+ 	stats.yHistogram[yVal * SwIspStats::kYHistogramSize / (256 * 256 * (div))]++;
+ 
++/*
++ * Accumulate the focus measure for sample x of a line whose samples span
++ * [0, limit), using yVal of the sample from SWSTATS_ACCUMULATE_LINE_STATS().
++ */
++#define SWSTATS_ACCUMULATE_FOCUS_STATS(x, limit)                          \
++	if (focusLine && (x) >= (limit) / 3 && (x) < (limit) * 2 / 3) {    \
++		int64_t yCur = yVal >> 8;                                  \
++		if (yPrev >= 0)                                            \
++			focusSquares += (yCur - yPrev) * (yCur - yPrev);   \
++		focusSum += yCur;                                          \
++		focusCount++;                                              \
++		yPrev = yCur;                                              \
++	}
++
+ #define SWSTATS_FINISH_LINE_STATS() \
+ 	stats.sum_.r() += sumR;     \
+ 	stats.sum_.g() += sumG;     \
+-	stats.sum_.b() += sumB;
++	stats.sum_.b() += sumB;     \
++	stats.focusSquares += focusSquares; \
++	stats.focusSum += focusSum; \
++	stats.focusCount += focusCount;
+ 
+-void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x;
+ 	const uint8_t *src1 = src[2] + window_.x;
+@@ -215,12 +236,13 @@ void SwStatsCpu::statsBGGR8Line0(const uint8_t *src[], SwIspStats &stats)
+ 		g = (g + g2) / 2;
+ 
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, window_.width)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint16_t *src0 = (const uint16_t *)src[1] + window_.x;
+ 	const uint16_t *src1 = (const uint16_t *)src[2] + window_.x;
+@@ -241,12 +263,13 @@ void SwStatsCpu::statsBGGR10Line0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 		/* divide Y by 4 for 10 -> 8 bpp value */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(4)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, window_.width)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint16_t *src0 = (const uint16_t *)src[1] + window_.x;
+ 	const uint16_t *src1 = (const uint16_t *)src[2] + window_.x;
+@@ -267,12 +290,13 @@ void SwStatsCpu::statsBGGR12Line0(const uint8_t *src[], SwIspStats &stats)
+ 
+ 		/* divide Y by 16 for 12 -> 8 bpp value */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(16)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, window_.width)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x * 5 / 4;
+ 	const uint8_t *src1 = src[2] + window_.x * 5 / 4;
+@@ -293,12 +317,13 @@ void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 		g = (g + g2) / 2;
+ 		/* Data is already 8 bits, divide by 1 */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, widthInBytes)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x * 5 / 4;
+ 	const uint8_t *src1 = src[2] + window_.x * 5 / 4;
+@@ -319,12 +344,13 @@ void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 		g = (g + g2) / 2;
+ 		/* Data is already 8 bits, divide by 1 */
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, widthInBytes)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsQuadRGGB10P(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsQuadRGGB10P(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const unsigned int widthInBytes = window_.width * 5 / 4;
+ 
+@@ -347,12 +373,13 @@ void SwStatsCpu::statsQuadRGGB10P(const uint8_t *src[], SwIspStats &stats)
+ 		g = rgb[1];
+ 		b = rgb[2];
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, widthInBytes)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsBGGR12PLine0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsBGGR12PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x * 3 / 2;
+ 	const uint8_t *src1 = src[2] + window_.x * 3 / 2;
+@@ -373,12 +400,13 @@ void SwStatsCpu::statsBGGR12PLine0(const uint8_t *src[], SwIspStats &stats)
+ 		g = (g + g2) / 2;
+ 
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, widthInBytes)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+ }
+ 
+-void SwStatsCpu::statsGBRG12PLine0(const uint8_t *src[], SwIspStats &stats)
++void SwStatsCpu::statsGBRG12PLine0(const uint8_t *src[], bool focusLine, SwIspStats &stats)
+ {
+ 	const uint8_t *src0 = src[1] + window_.x * 3 / 2;
+ 	const uint8_t *src1 = src[2] + window_.x * 3 / 2;
+@@ -399,6 +427,7 @@ void SwStatsCpu::statsGBRG12PLine0(const uint8_t *src[], SwIspStats &stats)
+ 		g = (g + g2) / 2;
+ 
+ 		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_FOCUS_STATS(x, widthInBytes)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+@@ -421,6 +450,9 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 	for (auto &s : stats_) {
+ 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.yHistogram.fill(0);
++		s.focusSquares = 0;
++		s.focusSum = 0;
++		s.focusCount = 0;
+ 	}
+ }
+ 
+@@ -438,8 +470,14 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 	if (valid) {
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->yHistogram.fill(0);
++		sharedStats_->focusSquares = 0;
++		sharedStats_->focusSum = 0;
++		sharedStats_->focusCount = 0;
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
++			sharedStats_->focusSquares += s.focusSquares;
++			sharedStats_->focusSum += s.focusSum;
++			sharedStats_->focusCount += s.focusCount;
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++)
+ 				sharedStats_->yHistogram[j] += s.yHistogram[j];
+ 		}
+@@ -630,7 +668,7 @@ void SwStatsCpu::processBayerFrame2(MappedFrameBuffer &in)
+ 		/* linePointers[0] is not used by any stats0_ functions */
+ 		linePointers[1] = src;
+ 		linePointers[2] = src + stride_;
+-		(this->*stats0_)(linePointers, stats_[0]);
++		(this->*stats0_)(linePointers, isFocusLine(y), stats_[0]);
+ 		src += stride_ * 2;
+ 	}
+ }
+@@ -643,7 +681,7 @@ void SwStatsCpu::processQuadBayerFrame(MappedFrameBuffer &in)
+ 	for (unsigned int y = 0; y + 3 < window_.height; y += 8) {
+ 		for (unsigned int row = 0; row < 4; ++row)
+ 			rows[row] = src + row * stride_ + window_.x * 5 / 4;
+-		statsQuadRGGB10P(rows, stats_[0]);
++		statsQuadRGGB10P(rows, isFocusLine(y), stats_[0]);
+ 		src += stride_ * 8;
+ 	}
+ }
+-- 
+2.55.0
+

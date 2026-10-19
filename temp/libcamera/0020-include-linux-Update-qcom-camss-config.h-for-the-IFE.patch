@@ -1,20 +1,21 @@
-From 3ddc1e36bb0ba961e83a441516fbc038911d9298 Mon Sep 17 00:00:00 2001
+From 35cb0870a4181c1e5f26ede717801e20bafa449f Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
-Date: Mon, 19 Oct 2026 15:45:20 +0200
-Subject: [PATCH 2/3] include: linux: Update qcom-camss-config.h for the IFE
+Date: Mon, 19 Oct 2026 18:18:52 +0200
+Subject: [PATCH 20/21] include: linux: Update qcom-camss-config.h for the IFE
 
-Sync with the kernel uAPI of the CAMSS IFE pixel path, which adds the
-AEC Bayer histogram parameters and statistics blocks and sizes the IFE
-parameters buffer for the white balance, colour correction and gamma
-blocks it applies.
+Sync the parameters part with the kernel uAPI of the CAMSS IFE pixel
+path, which adds the AEC Bayer histogram parameters block and sizes the
+IFE parameters buffer for the WB, colour correction and gamma blocks it
+applies. The statistics blocks are left out: they need a newer
+linux/media/v4l2-isp.h than this tree has, and nothing here uses them.
 
 Signed-off-by: japq7s <japiotr123@proton.me>
 ---
- include/linux/qcom-camss-config.h | 64 +++++++++++++++++++++++++++++++
- 1 file changed, 64 insertions(+)
+ include/linux/qcom-camss-config.h | 31 +++++++++++++++++++++++++++++++
+ 1 file changed, 31 insertions(+)
 
 diff --git a/include/linux/qcom-camss-config.h b/include/linux/qcom-camss-config.h
-index aa3d97c..d263252 100644
+index aa3d97c..6ca42bc 100644
 --- a/include/linux/qcom-camss-config.h
 +++ b/include/linux/qcom-camss-config.h
 @@ -25,12 +25,15 @@
@@ -33,7 +34,7 @@ index aa3d97c..d263252 100644
  };
  
  /* Number of entries in each gamma channel LUT. */
-@@ -209,4 +212,65 @@ struct camss_params_gamma {
+@@ -209,4 +212,32 @@ struct camss_params_gamma {
  	 sizeof(struct camss_params_color_correct)	+\
  	 sizeof(struct camss_params_gamma))
  
@@ -64,39 +65,6 @@ index aa3d97c..d263252 100644
 +	 sizeof(struct camss_params_color_correct)	+\
 +	 sizeof(struct camss_params_gamma)	+\
 +	 sizeof(struct camss_params_aec_bhist))
-+
-+/**
-+ * enum camss_stats_block_type - CAMSS ISP statistics block identifiers
-+ *
-+ * Each value identifies one statistics block in a
-+ * V4L2_META_FMT_QCOM_ISP_STATS buffer. The value is placed in the @type field
-+ * of &struct v4l2_isp_block_header.
-+ *
-+ * @CAMSS_STATS_AEC_BHIST: AEC Bayer histogram, &struct camss_stats_bhist
-+ */
-+enum camss_stats_block_type {
-+	CAMSS_STATS_AEC_BHIST = 1,
-+};
-+
-+/* Number of bins in a Bayer histogram. */
-+#define CAMSS_STATS_BHIST_BINS	1024
-+
-+/**
-+ * struct camss_stats_bhist - Bayer histogram
-+ *
-+ * Histogram of the luma of each 2x2 Bayer quad inside the histogram's region,
-+ * over CAMSS_STATS_BHIST_BINS equal bins spanning its input range. Quads
-+ * whose luma falls outside the input range are not counted.
-+ *
-+ * @header: block header; @header.type = CAMSS_STATS_AEC_BHIST
-+ * @bins:   number of quads per bin
-+ */
-+struct camss_stats_bhist {
-+	struct v4l2_isp_block_header header;
-+	__u32 bins[CAMSS_STATS_BHIST_BINS];
-+} __attribute__((aligned(8)));
-+
-+#define CAMSS_STATS_MAX_PAYLOAD		sizeof(struct camss_stats_bhist)
 +
  #endif /* _UAPI_LINUX_QCOM_CAMSS_CONFIG_H */
 -- 

@@ -1,7 +1,7 @@
-From 0bd26efc61fd48c38d61d10817afb01ffc3cceac Mon Sep 17 00:00:00 2001
+From 4441f6be68c77cba337a2fbeaf83ff08b3be07a7 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
-Date: Mon, 19 Oct 2026 17:53:59 +0200
-Subject: [PATCH 3/3] pipeline: camss: Add an IFE inline pixel pipe ISP
+Date: Mon, 19 Oct 2026 18:18:58 +0200
+Subject: [PATCH 21/21] pipeline: camss: Add an IFE inline pixel pipe ISP
 
 The VFE line that receives a sensor on SM8450 and newer has a pixel pipe
 that processes the frame on its way to memory: demux and black level,
@@ -22,20 +22,32 @@ scene the inverted means match the raw frame within 1%.
 
 LIBCAMERA_CAMSS_IFE=0 falls back to the OPE or the software ISP.
 
+This backport to v0.7.2 also carries the finer grained locking of the
+camss pipeline handler ("camss: Use finer grained locking /
+disableLinks()") without the OPE, which SM8450 does not have, and uses
+the v0.7.2 soft IPA: its setIspParams() event carries no frame number,
+so the frames waiting for parameters are kept in order. Lens controls
+from the IPA move the focus lens, and the statistics carry the focus
+measure of the contrast autofocus, computed on the luma of the centre
+third of the frame.
+
 Signed-off-by: japq7s <japiotr123@proton.me>
 ---
- src/libcamera/pipeline/camss/camss.cpp        |  35 +-
- src/libcamera/pipeline/camss/camss_csi.h      |   2 +
+ src/libcamera/pipeline/camss/camss.cpp        |  66 +-
+ src/libcamera/pipeline/camss/camss_csi.cpp    |  36 +-
+ src/libcamera/pipeline/camss/camss_csi.h      |   5 +
  src/libcamera/pipeline/camss/camss_isp.h      |   2 +
- .../pipeline/camss/camss_isp_ife.cpp          | 629 ++++++++++++++++++
- src/libcamera/pipeline/camss/camss_isp_ife.h  | 115 ++++
- src/libcamera/pipeline/camss/meson.build      |   1 +
- 6 files changed, 777 insertions(+), 7 deletions(-)
+ .../pipeline/camss/camss_isp_ife.cpp          | 681 ++++++++++++++++++
+ src/libcamera/pipeline/camss/camss_isp_ife.h  | 121 ++++
+ .../pipeline/camss/camss_isp_soft.cpp         |   6 +-
+ src/libcamera/pipeline/camss/camss_params.h   |   4 +-
+ src/libcamera/pipeline/camss/meson.build      |   3 +
+ 9 files changed, 894 insertions(+), 30 deletions(-)
  create mode 100644 src/libcamera/pipeline/camss/camss_isp_ife.cpp
  create mode 100644 src/libcamera/pipeline/camss/camss_isp_ife.h
 
 diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
-index 7a54481..4449ee5 100644
+index 6ab50b9..8c1831d 100644
 --- a/src/libcamera/pipeline/camss/camss.cpp
 +++ b/src/libcamera/pipeline/camss/camss.cpp
 @@ -38,6 +38,7 @@
@@ -43,10 +55,28 @@ index 7a54481..4449ee5 100644
  #include "camss_frames.h"
  #include "camss_isp.h"
 +#include "camss_isp_ife.h"
- #include "camss_isp_ope.h"
  #include "camss_isp_soft.h"
  
-@@ -186,6 +187,11 @@ CameraConfiguration::Status CamssCameraConfiguration::validate()
+ namespace libcamera {
+@@ -98,7 +99,7 @@ public:
+ 	PipelineHandlerCamss(CameraManager *manager);
+ 
+ 	std::unique_ptr<CameraConfiguration> generateConfiguration(Camera *camera,
+-								   std::span<const StreamRole> roles) override;
++								   Span<const StreamRole> roles) override;
+ 	int configure(Camera *camera, CameraConfiguration *config) override;
+ 
+ 	int exportFrameBuffers(Camera *camera, Stream *stream,
+@@ -117,6 +118,8 @@ private:
+ 		return static_cast<CamssCameraData *>(camera->_d());
+ 	}
+ 
++	bool acquireDevice(Camera *camera) override;
++	void releaseDevice(Camera *camera) override;
+ 	int allocateBuffers(Camera *camera);
+ 	void freeBuffers(Camera *camera);
+ 
+@@ -183,6 +186,11 @@ CameraConfiguration::Status CamssCameraConfiguration::validate()
  		return Invalid;
  	}
  
@@ -58,7 +88,41 @@ index 7a54481..4449ee5 100644
  	if (!rawCount) {
  		rawConfig.size = processedConfig.size;
  		rawConfig.bufferCount = processedConfig.bufferCount;
-@@ -412,9 +418,11 @@ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlLi
+@@ -289,10 +297,11 @@ CameraConfiguration::Status CamssCameraConfiguration::validate()
+ PipelineHandlerCamss::PipelineHandlerCamss(CameraManager *manager)
+ 	: PipelineHandler(manager), csi_()
+ {
++	lockOnAcquire_ = false;
+ }
+ 
+ std::unique_ptr<CameraConfiguration>
+-PipelineHandlerCamss::generateConfiguration(Camera *camera, std::span<const StreamRole> roles)
++PipelineHandlerCamss::generateConfiguration(Camera *camera, Span<const StreamRole> roles)
+ {
+ 	CamssCameraData *data = cameraData(camera);
+ 	std::unique_ptr<CamssCameraConfiguration> config =
+@@ -382,6 +391,20 @@ void PipelineHandlerCamss::freeBuffers(Camera *camera)
+ 	cameraData(camera)->isp_->freeBuffers();
+ }
+ 
++bool PipelineHandlerCamss::acquireDevice(Camera *camera)
++{
++	CamssCameraData *data = cameraData(camera);
++
++	return data->csi_->acquireDevice();
++}
++
++void PipelineHandlerCamss::releaseDevice(Camera *camera)
++{
++	CamssCameraData *data = cameraData(camera);
++
++	data->csi_->releaseDevice();
++}
++
+ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlList *controls)
+ {
+ 	CamssCameraData *data = cameraData(camera);
+@@ -394,9 +417,11 @@ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlLi
  
  	data->delayedCtrls_->reset();
  
@@ -73,7 +137,7 @@ index 7a54481..4449ee5 100644
  
  	ret = data->isp_->start();
  	if (ret)
-@@ -423,7 +431,8 @@ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlLi
+@@ -405,7 +430,8 @@ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlLi
  	return 0;
  
  stop:
@@ -83,7 +147,7 @@ index 7a54481..4449ee5 100644
  freebuffers:
  	freeBuffers(camera);
  
-@@ -438,7 +447,8 @@ void PipelineHandlerCamss::stopDevice(Camera *camera)
+@@ -420,7 +446,8 @@ void PipelineHandlerCamss::stopDevice(Camera *camera)
  	data->cancelPendingRequests();
  
  	data->isp_->stop();
@@ -93,7 +157,7 @@ index 7a54481..4449ee5 100644
  
  	freeBuffers(camera);
  }
-@@ -473,6 +483,13 @@ void CamssCameraData::queuePendingRequests()
+@@ -455,6 +482,13 @@ void CamssCameraData::queuePendingRequests()
  		if (!info)
  			break;
  
@@ -107,27 +171,103 @@ index 7a54481..4449ee5 100644
  		/*
  		 * Queue a buffer on the CSI, using the raw stream buffer
  		 * provided in the request, if any, or a CIO2 internal buffer
-@@ -541,9 +558,13 @@ bool PipelineHandlerCamss::match(DeviceEnumerator *enumerator)
+@@ -523,12 +557,18 @@ bool PipelineHandlerCamss::match(DeviceEnumerator *enumerator)
  		data->delayedCtrls_ =
  			std::make_unique<DelayedControls>(sensor->device(), params);
  
--		data->isp_ = CamssIspOpe::match(this, enumerator, sensor,
--						&data->frameInfos_,
+-		data->isp_ = std::make_unique<CamssIspSoft>(this, sensor,
+-							    &data->frameInfos_,
+-							    &data->controlInfo_);
+-		if (!data->isp_->isValid()) {
+-			LOG(Camss, Error) << "Failed to create software ISP";
+-			continue;
 +		data->isp_ = CamssIspIfe::match(this, data->csi_->csidVfeLink(),
 +						sensor, &data->frameInfos_,
- 						&data->controlInfo_);
-+		if (data->isp_ == nullptr)
-+			data->isp_ = CamssIspOpe::match(this, enumerator, sensor,
-+							&data->frameInfos_,
-+							&data->controlInfo_);
- 		if (data->isp_ == nullptr) {
- 			data->isp_ =
- 				std::make_unique<CamssIspSoft>(this, sensor,
++						&data->controlInfo_);
++		if (data->isp_ == nullptr) {
++			data->isp_ =
++				std::make_unique<CamssIspSoft>(this, sensor,
++							       &data->frameInfos_,
++							       &data->controlInfo_);
++			if (!data->isp_->isValid()) {
++				LOG(Camss, Error) << "Failed to create software ISP";
++				continue;
++			}
+ 		}
+ 
+ 		data->isp_->inputBufferReady.connect(data->csi_.get(),
+diff --git a/src/libcamera/pipeline/camss/camss_csi.cpp b/src/libcamera/pipeline/camss/camss_csi.cpp
+index 481aaa2..2af54d2 100644
+--- a/src/libcamera/pipeline/camss/camss_csi.cpp
++++ b/src/libcamera/pipeline/camss/camss_csi.cpp
+@@ -295,6 +295,12 @@ int CamssCsiCamera::configure(const StreamConfiguration &cfg, const Transform &t
+ 	V4L2DeviceFormat outputFormat;
+ 	int ret;
+ 
++	for (auto &link : links_) {
++		ret = link.sinkSubdev->entity()->disableLinks();
++		if (ret)
++			return ret;
++	}
++
+ 	sensorFormat = getSensorFormat(cfg.size, cfg.pixelFormat, false);
+ 	/* This updates sensorFormat with the actual established format */
+ 	ret = sensor_->setFormat(&sensorFormat, transform);
+@@ -338,6 +344,24 @@ int CamssCsiCamera::exportBuffers(unsigned int count,
+ 	return output_->exportBuffers(count, buffers);
+ }
+ 
++bool CamssCsiCamera::acquireDevice()
++{
++	for (auto &link : links_) {
++		if (!link.sinkSubdev->lock()) {
++			releaseDevice();
++			return false;
++		}
++	}
++
++	return true;
++}
++
++void CamssCsiCamera::releaseDevice()
++{
++	for (auto &link : links_)
++		link.sinkSubdev->unlock();
++}
++
+ int CamssCsiCamera::start()
+ {
+ 	int ret = output_->exportBuffers(bufferCount_, &buffers_);
+@@ -456,18 +480,6 @@ CamssCsi::Cameras CamssCsi::match(PipelineHandler *pipe, DeviceEnumerator *enume
+ 	if (!camssMediaDev_)
+ 		return {};
+ 
+-	/*
+-	 * Disable all links that are enabled to start with a clean state,
+-	 * CamssCsiCamera::configure() enables links as necessary.
+-	 * \todo instead only disable links on used entities, to allow
+-	 * 2 separate libcamera instances to drive 2 different sensors.
+-	 * This will also require changes to PipelineHandler::acquire() to
+-	 * allow a more fine grained version of that locking a list of
+-	 * subdevs associated with a Camera instead of the mediactl node.
+-	 */
+-	if (camssMediaDev_->disableLinks())
+-		return {};
+-
+ 	getEntities(phys_, "msm_csiphy%d", kMaxCsiPhys);
+ 	getEntities(csids_, "msm_csid%d", kMaxCsiDecoders);
+ 	/* Only RDI0 is used for now */
 diff --git a/src/libcamera/pipeline/camss/camss_csi.h b/src/libcamera/pipeline/camss/camss_csi.h
-index 81d87c3..d9ea7fa 100644
+index d78175a..d9ea7fa 100644
 --- a/src/libcamera/pipeline/camss/camss_csi.h
 +++ b/src/libcamera/pipeline/camss/camss_csi.h
-@@ -58,6 +58,8 @@ public:
+@@ -52,9 +52,14 @@ public:
+ 
+ 	void setIsp(CamssIsp *isp) { isp_ = isp; }
+ 
++	bool acquireDevice();
++	void releaseDevice();
++
  	int start();
  	void stop();
  
@@ -151,10 +291,10 @@ index 55e967b..a03155f 100644
  	virtual StreamConfiguration generateConfiguration(const StreamConfiguration &raw) const = 0;
 diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
 new file mode 100644
-index 0000000..36d096e
+index 0000000..6e3bb38
 --- /dev/null
 +++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
-@@ -0,0 +1,629 @@
+@@ -0,0 +1,681 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Qualcomm CAMSS IFE inline pixel pipe ISP class
@@ -168,6 +308,7 @@ index 0000000..36d096e
 +#include <string.h>
 +
 +#include <linux/media-bus-format.h>
++#include <linux/v4l2-controls.h>
 +
 +#include <libcamera/base/log.h>
 +
@@ -177,6 +318,7 @@ index 0000000..36d096e
 +#include <libcamera/request.h>
 +#include <libcamera/stream.h>
 +
++#include "libcamera/internal/camera_lens.h"
 +#include "libcamera/internal/camera_sensor.h"
 +#include "libcamera/internal/dma_buf_allocator.h"
 +#include "libcamera/internal/framebuffer.h"
@@ -244,7 +386,7 @@ index 0000000..36d096e
 + * \brief CAMSS ISP class for the inline pixel pipe of the VFE (IFE)
 + */
 +
-+CamssIspIfe::CamssIspIfe(PipelineHandler *pipe, const CameraSensor *sensor,
++CamssIspIfe::CamssIspIfe(PipelineHandler *pipe, CameraSensor *sensor,
 +			 CamssFrames *frameInfos, ControlInfoMap *ispControls)
 +	: sensor_(sensor), frameInfos_(frameInfos),
 +	  sharedParams_("camss_ife_params"), sharedStats_("camss_ife_stats")
@@ -254,7 +396,7 @@ index 0000000..36d096e
 +		return;
 +	}
 +
-+	ipa_ = pipe->createIPA<ipa::softisp::IPAProxySoftIsp>(0, 0);
++	ipa_ = pipe->createIPA<ipa::soft::IPAProxySoft>(0, 0);
 +	if (!ipa_) {
 +		LOG(Camss, Error) << "Creating IPA failed";
 +		return;
@@ -281,7 +423,8 @@ index 0000000..36d096e
 +		return;
 +	}
 +
-+	ipa_->paramsComputed.connect(this, &CamssIspIfe::paramsComputed);
++	ipa_->setIspParams.connect(this, &CamssIspIfe::setIspParams);
++	ipa_->setLensControls.connect(this, &CamssIspIfe::setLensControls);
 +	ipa_->metadataReady.connect(this,
 +				    [&](uint32_t frame, const ControlList &metadata) {
 +					    metadataReady.emit(frame, metadata);
@@ -416,12 +559,14 @@ index 0000000..36d096e
 +
 +int CamssIspIfe::configure(const StreamConfiguration &inputCfg,
 +			   const StreamConfiguration &outputCfg,
-+			   ControlInfoMap *ispControls)
++			   [[maybe_unused]] ControlInfoMap *ispControls)
 +{
-+	ipa::softisp::IPAConfigInfo configInfo;
++	ipa::soft::IPAConfigInfo configInfo;
 +	configInfo.sensorControls = sensor_->controls();
++	if (CameraLens *lens = sensor_->focusLens())
++		configInfo.lensControls = lens->controls();
 +
-+	int ret = ipa_->configure(configInfo, ispControls);
++	int ret = ipa_->configure(configInfo);
 +	if (ret < 0)
 +		return ret;
 +
@@ -491,6 +636,7 @@ index 0000000..36d096e
 +
 +void CamssIspIfe::freeBuffers()
 +{
++	pendingParams_ = {};
 +	frameInfos_->clear();
 +	mappedParams_.clear();
 +	applied_.clear();
@@ -510,8 +656,31 @@ index 0000000..36d096e
 +	uint32_t frame = request->sequence();
 +
 +	ipa_->queueRequest(frame, request->controls());
++	pendingParams_.push(frame);
 +	ipa_->computeParams(frame);
 +	/* paramsComputed() queues the buffers once the parameters are known */
++}
++
++/* The IPA answers computeParams() in order, without the frame number */
++void CamssIspIfe::setIspParams()
++{
++	if (pendingParams_.empty())
++		return;
++
++	uint32_t frame = pendingParams_.front();
++	pendingParams_.pop();
++	paramsComputed(frame);
++}
++
++void CamssIspIfe::setLensControls(const ControlList &lensControls)
++{
++	CameraLens *lens = sensor_->focusLens();
++
++	if (!lens || !lensControls.contains(V4L2_CID_FOCUS_ABSOLUTE))
++		return;
++
++	/* A voice coil has no frame timing to synchronise with */
++	lens->setFocusPosition(lensControls.get(V4L2_CID_FOCUS_ABSOLUTE).get<int32_t>());
 +}
 +
 +void CamssIspIfe::paramsComputed(uint32_t frame)
@@ -529,8 +698,9 @@ index 0000000..36d096e
 +	const DebayerParams debayerParams = *sharedParams_;
 +	Applied applied;
 +
-+	applied.gains = debayerParams.gains.max(0.0).min(31.0);
-+	applied.blackLevel = std::clamp(debayerParams.blackLevel.g(), 0.0, 0.9);
++	applied.gains = RGB<double>({ debayerParams.gains.r(), debayerParams.gains.g(),
++				      debayerParams.gains.b() }).max(0.0).min(31.0);
++	applied.blackLevel = std::clamp<double>(debayerParams.blackLevel.g(), 0.0, 0.9);
 +	applied.matrix = debayerParams.combinedMatrix;
 +	applied.lut = gammaLut(debayerParams.gamma, debayerParams.contrastExp);
 +
@@ -606,8 +776,8 @@ index 0000000..36d096e
 +void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &applied)
 +{
 +	const unsigned int stride = stride_;
-+	const std::span<uint8_t> y = frame.planes()[0];
-+	const std::span<uint8_t> uv = frame.planes().size() > 1 ?
++	const Span<uint8_t> y = frame.planes()[0];
++	const Span<uint8_t> uv = frame.planes().size() > 1 ?
 +				      frame.planes()[1] :
 +				      y.subspan(stride * size_.height);
 +
@@ -672,6 +842,28 @@ index 0000000..36d096e
 +
 +			unsigned int luma = raw[0] * 77 + raw[1] * 150 + raw[2] * 29;
 +			stats.yHistogram[luma * SwIspStats::kYHistogramSize / (256 * 256)]++;
++		}
++	}
++
++	/*
++	 * Focus measure as SwStatsCpu computes it, squared differences of
++	 * horizontally adjacent luminance samples, here on the full resolution
++	 * luma of the centre third of the frame.
++	 */
++	const unsigned int fx0 = size_.width / 3, fx1 = size_.width * 2 / 3;
++	const unsigned int fy0 = size_.height / 3, fy1 = size_.height * 2 / 3;
++	for (unsigned int row = fy0; row < fy1; row += kStatsStep) {
++		const uint8_t *yl = &y[row * stride];
++		int64_t prev = -1;
++
++		for (unsigned int col = fx0; col < fx1; col += 2) {
++			int64_t cur = yl[col];
++
++			if (prev >= 0)
++				stats.focusSquares += (cur - prev) * (cur - prev);
++			stats.focusSum += cur;
++			stats.focusCount++;
++			prev = cur;
 +		}
 +	}
 +
@@ -760,7 +952,7 @@ index 0000000..36d096e
 + */
 +std::unique_ptr<CamssIspIfe> CamssIspIfe::match(PipelineHandler *pipe,
 +						MediaLink *csidRdiLink,
-+						const CameraSensor *sensor,
++						CameraSensor *sensor,
 +						CamssFrames *frameInfos,
 +						ControlInfoMap *ispControls)
 +{
@@ -786,10 +978,10 @@ index 0000000..36d096e
 +} /* namespace libcamera */
 diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.h b/src/libcamera/pipeline/camss/camss_isp_ife.h
 new file mode 100644
-index 0000000..3ee3974
+index 0000000..823d7e9
 --- /dev/null
 +++ b/src/libcamera/pipeline/camss/camss_isp_ife.h
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,121 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Qualcomm CAMSS IFE inline pixel pipe ISP class
@@ -802,8 +994,10 @@ index 0000000..3ee3974
 +#include <memory>
 +#include <vector>
 +
-+#include <libcamera/ipa/softisp_ipa_interface.h>
-+#include <libcamera/ipa/softisp_ipa_proxy.h>
++#include <queue>
++
++#include <libcamera/ipa/soft_ipa_interface.h>
++#include <libcamera/ipa/soft_ipa_proxy.h>
 +
 +#include "libcamera/internal/mapped_framebuffer.h"
 +#include "libcamera/internal/matrix.h"
@@ -836,11 +1030,11 @@ index 0000000..3ee3974
 +public:
 +	static std::unique_ptr<CamssIspIfe> match(PipelineHandler *pipe,
 +						  MediaLink *csidRdiLink,
-+						  const CameraSensor *sensor,
++						  CameraSensor *sensor,
 +						  CamssFrames *frameInfos,
 +						  ControlInfoMap *ispControls);
 +
-+	CamssIspIfe(PipelineHandler *pipe, const CameraSensor *sensor,
++	CamssIspIfe(PipelineHandler *pipe, CameraSensor *sensor,
 +		    CamssFrames *frameInfos, ControlInfoMap *ispControls);
 +	~CamssIspIfe() override;
 +
@@ -878,11 +1072,13 @@ index 0000000..3ee3974
 +
 +	int init(MediaLink *csidRdiLink);
 +	void paramsComputed(uint32_t frame);
++	void setIspParams();
++	void setLensControls(const ControlList &lensControls);
 +	void parameterBufferReady(FrameBuffer *buffer);
 +	void outputReady(FrameBuffer *buffer);
 +	void computeStats(const MappedFrameBuffer &frame, const Applied &applied);
 +
-+	const CameraSensor *sensor_;
++	CameraSensor *sensor_;
 +	CamssFrames *frameInfos_;
 +
 +	MediaLink *csidRdiLink_ = nullptr;
@@ -893,7 +1089,9 @@ index 0000000..3ee3974
 +
 +	SharedMemObject<DebayerParams> sharedParams_;
 +	SharedMemObject<SwIspStats> sharedStats_;
-+	std::unique_ptr<ipa::softisp::IPAProxySoftIsp> ipa_;
++	std::unique_ptr<ipa::soft::IPAProxySoft> ipa_;
++	/* Frames whose parameters the IPA computes, in order */
++	std::queue<uint32_t> pendingParams_;
 +
 +	std::vector<std::unique_ptr<FrameBuffer>> paramBuffers_;
 +	std::map<FrameBuffer *, MappedFrameBuffer> mappedParams_;
@@ -905,18 +1103,66 @@ index 0000000..3ee3974
 +};
 +
 +} /* namespace libcamera */
+diff --git a/src/libcamera/pipeline/camss/camss_isp_soft.cpp b/src/libcamera/pipeline/camss/camss_isp_soft.cpp
+index 113ba76..564718d 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_soft.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_soft.cpp
+@@ -167,16 +167,16 @@ StreamConfiguration CamssIspSoft::validate(const StreamConfiguration &raw, const
+ 
+ int CamssIspSoft::configure(const StreamConfiguration &inputCfg,
+ 			    const StreamConfiguration &outputCfg,
+-			    ControlInfoMap *ispControls)
++			    [[maybe_unused]] ControlInfoMap *ispControls)
+ {
+ 	std::vector<std::reference_wrapper<const StreamConfiguration>> outputCfgs;
+ 	outputCfgs.push_back(outputCfg);
+ 
+ 	/* \todo refactor SoftwareIsp to remove the need to pass this */
+-	ipa::softisp::IPAConfigInfo configInfo;
++	ipa::soft::IPAConfigInfo configInfo;
+ 	configInfo.sensorControls = sensor_->controls();
+ 
+-	return swIsp_->configure(inputCfg, outputCfgs, configInfo, ispControls);
++	return swIsp_->configure(inputCfg, outputCfgs, configInfo);
+ }
+ 
+ int CamssIspSoft::allocateBuffers([[maybe_unused]] unsigned int bufferCount)
+diff --git a/src/libcamera/pipeline/camss/camss_params.h b/src/libcamera/pipeline/camss/camss_params.h
+index 51e6e63..c9e92f2 100644
+--- a/src/libcamera/pipeline/camss/camss_params.h
++++ b/src/libcamera/pipeline/camss/camss_params.h
+@@ -22,7 +22,7 @@ namespace libcamera {
+ 
+ namespace ipa::camss {
+ 
+-enum class CamssBlocks {
++enum class CamssBlocks : uint16_t {
+ 	AwbGains,
+ 	ChromaEnh,
+ 	ColorCorrect,
+@@ -60,7 +60,7 @@ struct param_traits {
+ class CamssParams : public V4L2Params<details::param_traits>
+ {
+ public:
+-	CamssParams(std::span<uint8_t> data)
++	CamssParams(Span<uint8_t> data)
+ 		: V4L2Params(data, V4L2_ISP_PARAMS_VERSION_V1)
+ 	{
+ 	}
 diff --git a/src/libcamera/pipeline/camss/meson.build b/src/libcamera/pipeline/camss/meson.build
-index cffb53e..e00cfc3 100644
+index 2f3931d..d3b6217 100644
 --- a/src/libcamera/pipeline/camss/meson.build
 +++ b/src/libcamera/pipeline/camss/meson.build
-@@ -5,6 +5,7 @@ libcamera_internal_sources += files([
+@@ -5,6 +5,9 @@ libcamera_internal_sources += files([
      'camss_csi.cpp',
      'camss_frames.cpp',
      'camss_isp.cpp',
 +    'camss_isp_ife.cpp',
-     'camss_isp_ope.cpp',
      'camss_isp_soft.cpp',
      'camss_util.cpp',
++    # FIXME hack
++    '../../../ipa/libipa/v4l2_params.cpp'
+ ])
 -- 
 2.55.0
 

@@ -2,10 +2,8 @@
 maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
-# Hans de Goede's CAMSS pipeline handler (camss_pipeline_v2.2), on 0.7.2
-_commit=4ee1bd781f9fb056759b755d8b90754244c0193e
 pkgver=9999$_pkgver
-pkgrel=8
+pkgrel=9
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -59,14 +57,32 @@ _tuning_files="
 	s5k3l6xx.yaml
 	s5kjn1.yaml
 	"
-source="libcamera-$_commit.tar.gz::https://github.com/jwrdegoede/libcamera/archive/$_commit.tar.gz
-	0001-ipa-libipa-camera_sensor_helper-Add-IMX890-helper.patch
-	0002-include-linux-Update-qcom-camss-config.h-for-the-IFE.patch
-	0003-pipeline-camss-Add-an-IFE-inline-pixel-pipe-ISP.patch
+source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_pkgver/libcamera-v$_pkgver.tar.gz
+	0001-libcamera-simple-Enable-softISP-for-the-Pinephone.patch
+	0002-libcamera-simple-Skip-hwISP-formats-if-swISP-is-acti.patch
+	0003-software_isp-debayer_egl-Re-add-log-for-failing-DMAB.patch
+	0004-ipa-simple-Derive-AGC-minimum-gain-step-from-sensor-.patch
+	0005-debayer-Further-demote-Unsupported-input-format-log.patch
+	0006-debayer_egl-Use-untransposed-matrix-to-fix-GLES-2.0.patch
+	0007-simple-Limit-swISP-output-sizes.patch
+	0008-libcamera-Add-quad-Bayer-CFA-layout-support.patch
+	0009-ipa-libipa-camera_sensor_helper-Add-IMX890-helper.patch
+	0010-libcamera-software_isp-Add-a-focus-measure-to-the-st.patch
+	0011-libcamera-simple-Forward-lens-controls-from-the-soft.patch
+	0012-ipa-simple-Add-contrast-detection-autofocus.patch
+	0013-libcamera-media_object-Add-MediaEntity-disableLinks.patch
+	0014-libcamera-v4l2_device-add-lock-and-unlock-methods.patch
+	0015-libcamera-pipeline-Allow-pipeline-handlers-to-opt-ou.patch
+	0016-camss-Add-camss-utility-functions.patch
+	0017-camss-Add-camss-pipeline-handler.patch
+	0018-camss-Add-include-linux-qcom-camss-config.h.patch
+	0019-camss-Add-camss_params.h.patch
+	0020-include-linux-Update-qcom-camss-config.h-for-the-IFE.patch
+	0021-pipeline-camss-Add-an-IFE-inline-pixel-pipe-ISP.patch
 	qcam.desktop
 	$_tuning_files
 	"
-builddir="$srcdir/$pkgname-$_commit"
+builddir="$srcdir/$pkgname-v$_pkgver"
 # gstreamer tests fail
 # manual strip because ipa .sign files depend on the file contents- have to re-sign after strip
 options="!strip !check"
@@ -122,7 +138,7 @@ ipa() {
 	amove usr/share/libcamera/ipa
 
 	for _tuning_file in $_tuning_files; do
-		install -Dm644 -t "$subpkgdir"/usr/share/libcamera/ipa/softisp \
+		install -Dm644 -t "$subpkgdir"/usr/share/libcamera/ipa/simple \
 			"$srcdir"/"$_tuning_file"
 	done
 
@@ -176,10 +192,28 @@ py3() {
 
 
 sha512sums="
-3b87030ee03aa59c3bfb52edeeff8761474378bc70d08ba20f15fbe0847ea55a57383b98288db8a43ff7f97977222aef05e06b2ef60a5b9d0c75c8bb09de60f3  libcamera-4ee1bd781f9fb056759b755d8b90754244c0193e.tar.gz
-3a79d4305333a7e6665ec0d83bdd13a88d3210312804dbcbd08beb806d1e70691b4aae80d53d58870dd9405bfa9248be589d7f4fb3d66f199bddb1a52d16d987  0001-ipa-libipa-camera_sensor_helper-Add-IMX890-helper.patch
-53056908a406ce9ba9c86ed7a021528aa0d318881f6adef280ff8918bd5e0f97d78af261a5d776ef02f8583d8b7f7c4d99a123ec698490a3180935822100d1f4  0002-include-linux-Update-qcom-camss-config.h-for-the-IFE.patch
-cfd7aa7d9a64caf1593d7bce483f6f6be41a11daba5c9d8cab76891d72e91ff3cd3355ed68b21c43858f0b9255539b3ec82d7277db7d7f229207e65c1931c132  0003-pipeline-camss-Add-an-IFE-inline-pixel-pipe-ISP.patch
+b317cdc96f61682ee0bf26dfb7c4d6441db9a9c5b93ab53528121a8cd44862b3d59cbaa3881bb0837e3e381564c184c7b742124aef4267eea754c6083de353c1  libcamera-v0.7.2.tar.gz
+e1a0f73835fcda5e3bd9f258afb30b863496e1f16e916294fd8fce2ed7ca82cf67af9ab61494528c259a0b5b6634b204786717b963006ddf60e5393f59d8357c  0001-libcamera-simple-Enable-softISP-for-the-Pinephone.patch
+c8592b461a3c27f19ce832a3f5ee1d8ddfcb8b69225a4b39afcc1633cf268773d6d6e294466c5ad862c770f63ad4a29053ce3598137ae496129c417bfe6146b4  0002-libcamera-simple-Skip-hwISP-formats-if-swISP-is-acti.patch
+46b1f4c8b773b4e97b50dc84bd1307809bcf2937f6f6287257a36e26a76462eaeeffda024572097e3fb6c9bd31d884f972bbea70d30b30d9d0873d9d0f1185ed  0003-software_isp-debayer_egl-Re-add-log-for-failing-DMAB.patch
+62311de4dc3cb920318f64af04f540bdc1345211e766b9fc35517c6925b696cbeea867bbcb4a95ea1af196bc7e2ee9a4fde0b54089d3965d4128c2e5fcdc5fbc  0004-ipa-simple-Derive-AGC-minimum-gain-step-from-sensor-.patch
+68fe84c059371dcf70307929a82e37b4145baea510e1bfbe22928b1eea068aad3c7849e6f634e0799cb2cd8df7d2cd2d13c05456c15541e753cb23281c070fa6  0005-debayer-Further-demote-Unsupported-input-format-log.patch
+2fa9b8b99663e585028ac0220a7bbab7327a0a42c1c80649f7380809064cae114f9e9b0ca1c0aff449b002d49ed9f05ee49cd9b9767dea23302f7836a0bcad69  0006-debayer_egl-Use-untransposed-matrix-to-fix-GLES-2.0.patch
+aacdb07a89cb86bcb596fb84b7f98c069c92d55caa3d35fe250153f8bd67f10d861f4a3f8ff05d9788b77a24420a2d9849a8c4870a796030419b7e3cb90f4d67  0007-simple-Limit-swISP-output-sizes.patch
+5ac442a61f783da630dcdf4588689be88c6aa374d0f215918759f8a530a5f9998bbaf58454ec4fba65578ee65a706612c42c8593ed806a1da7cef2eaaa464490  0008-libcamera-Add-quad-Bayer-CFA-layout-support.patch
+fefd3139e2d94e89bf359b98ed313f974a43f0a7685ed2ad9f158521713519d81f47a10fc76103a6c501e6fc8e5e8bd5f9037e2e35f0a3dd7292aa9e619fb1b0  0009-ipa-libipa-camera_sensor_helper-Add-IMX890-helper.patch
+642843c0d73bd5c3c49122c914ce71d2e5bc2fff40213a989a7411057cbdfd43dbe6e256ed5d2b39e87dc50bfb25ea6e2bfcb5902d5131f4ed1db58c7185c117  0010-libcamera-software_isp-Add-a-focus-measure-to-the-st.patch
+6325f01b4a869c1e83f88908371d0526d5066130fd02dcce692dcc596b7c584822d42109be9df341dc0a7419180e89222dc29cdfb240c88cf6036e7184482267  0011-libcamera-simple-Forward-lens-controls-from-the-soft.patch
+6adde3f36b3c29c7bca0db26449c3c83b545d1e6780ec17e99a7d0a53062ac6c9030484813ad682f6843de742372f741fe190d12b1bb2b204c618bb13137fbe2  0012-ipa-simple-Add-contrast-detection-autofocus.patch
+70b5729c01e6e65ed1214ae66e10331594934c449a00c4fd9847cbde7c4355f68e50743ccf106360c0809bbffb61649f950783f1703cdda03cbd0f4675dec1f6  0013-libcamera-media_object-Add-MediaEntity-disableLinks.patch
+66fe961635ab6a274c2a1fa64a7f5a61090f74214622dc7906b196168aaa7a74813f76d235ed47fc1c46e017bfca47d26104d0c4b3dcd903a45814a87de23417  0014-libcamera-v4l2_device-add-lock-and-unlock-methods.patch
+a8c0592e232d233933548aa2471e03b5c4f083f261a29a66de4d902067be129dfd353248941f1b14536af53300c46b42bbbe663c3b929b74e1ebe8da818a0a79  0015-libcamera-pipeline-Allow-pipeline-handlers-to-opt-ou.patch
+a988a4fd50cefe7405398755e0e0988037e7d3f1f05c9f8d5854d284e43919206a16405de469c955fb8f42dc80af4f7449543a443d17f29d8066941c3dfc8654  0016-camss-Add-camss-utility-functions.patch
+bf2c581902b04877bcaefd770dcf16f50e5694c45523746ef981aca8b34e0dde98fc49a91d56440e490c10df0358198e737eece57eaf3ca0b41a896dc5bf2e9a  0017-camss-Add-camss-pipeline-handler.patch
+cd37baca3d014c011dfdd8a1bda332e8c8f7477a7bad777ee79c42dcfacf54e65c69ef99ec90dcc34fc157d84a1f201dd65566ce335dedf22a1ee6accfea81e6  0018-camss-Add-include-linux-qcom-camss-config.h.patch
+f1dd8843dcbf2ad1509f9c8b8f72363d0b24da2b261bd31ebb9c01df8c489bac02ab188b2823e6b8ad8a55838fdd6b23d0fcb2da730298a6c000a516d2ef4aa1  0019-camss-Add-camss_params.h.patch
+21957db588590bdb523b5dab4a538beab11315781b4fdce5b88587e036f6e01de9ccdf5139f37108ef5b2711a652909e72c97c3c3e6d9671af2ab3d45720360b  0020-include-linux-Update-qcom-camss-config.h-for-the-IFE.patch
+8a2697909060dbc453748174ca5d74fa767d1a3a1ffd3882d17b93dc810e4c5739bf666780adb9f1d1408043b49d669f323d922ba37cd2764c4454f0bfbb10c5  0021-pipeline-camss-Add-an-IFE-inline-pixel-pipe-ISP.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml
