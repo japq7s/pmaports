@@ -1,0 +1,922 @@
+From 0bd26efc61fd48c38d61d10817afb01ffc3cceac Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 17:53:59 +0200
+Subject: [PATCH 3/3] pipeline: camss: Add an IFE inline pixel pipe ISP
+
+The VFE line that receives a sensor on SM8450 and newer has a pixel pipe
+that processes the frame on its way to memory: demux and black level,
+WB gains, demosaic, colour correction, gamma and colour space transform,
+with the parameters taken from a v4l2-isp parameters buffer per frame.
+
+Add a CamssIsp implementation for it. The CSI decoder is linked to the
+pixel line of the VFE whose RDI0 the CSI side picked, and NV12 is
+captured from the line straight into the request buffers: there is no
+raw buffer, so the CSI side does not stream and raw streams are refused.
+
+The soft IPA computes the parameters, which are translated to the WB,
+colour correction and gamma blocks as for the OPE. Its statistics are
+computed on the CPU from a sparse sampling of each NV12 frame, with the
+gamma curve, the colour correction and the gains that produced the frame
+undone so that the IPA sees the sensor values it expects. On a static
+scene the inverted means match the raw frame within 1%.
+
+LIBCAMERA_CAMSS_IFE=0 falls back to the OPE or the software ISP.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss.cpp        |  35 +-
+ src/libcamera/pipeline/camss/camss_csi.h      |   2 +
+ src/libcamera/pipeline/camss/camss_isp.h      |   2 +
+ .../pipeline/camss/camss_isp_ife.cpp          | 629 ++++++++++++++++++
+ src/libcamera/pipeline/camss/camss_isp_ife.h  | 115 ++++
+ src/libcamera/pipeline/camss/meson.build      |   1 +
+ 6 files changed, 777 insertions(+), 7 deletions(-)
+ create mode 100644 src/libcamera/pipeline/camss/camss_isp_ife.cpp
+ create mode 100644 src/libcamera/pipeline/camss/camss_isp_ife.h
+
+diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
+index 7a54481..4449ee5 100644
+--- a/src/libcamera/pipeline/camss/camss.cpp
++++ b/src/libcamera/pipeline/camss/camss.cpp
+@@ -38,6 +38,7 @@
+ #include "camss_csi.h"
+ #include "camss_frames.h"
+ #include "camss_isp.h"
++#include "camss_isp_ife.h"
+ #include "camss_isp_ope.h"
+ #include "camss_isp_soft.h"
+ 
+@@ -186,6 +187,11 @@ CameraConfiguration::Status CamssCameraConfiguration::validate()
+ 		return Invalid;
+ 	}
+ 
++	if (rawCount && data_->isp_->isInline()) {
++		LOG(Camss, Debug) << "Raw streams not supported with the IFE pixel line";
++		return Invalid;
++	}
++
+ 	if (!rawCount) {
+ 		rawConfig.size = processedConfig.size;
+ 		rawConfig.bufferCount = processedConfig.bufferCount;
+@@ -412,9 +418,11 @@ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlLi
+ 
+ 	data->delayedCtrls_->reset();
+ 
+-	ret = data->csi_->start();
+-	if (ret)
+-		goto freebuffers;
++	if (!data->isp_->isInline()) {
++		ret = data->csi_->start();
++		if (ret)
++			goto freebuffers;
++	}
+ 
+ 	ret = data->isp_->start();
+ 	if (ret)
+@@ -423,7 +431,8 @@ int PipelineHandlerCamss::start(Camera *camera, [[maybe_unused]] const ControlLi
+ 	return 0;
+ 
+ stop:
+-	data->csi_->stop();
++	if (!data->isp_->isInline())
++		data->csi_->stop();
+ freebuffers:
+ 	freeBuffers(camera);
+ 
+@@ -438,7 +447,8 @@ void PipelineHandlerCamss::stopDevice(Camera *camera)
+ 	data->cancelPendingRequests();
+ 
+ 	data->isp_->stop();
+-	data->csi_->stop();
++	if (!data->isp_->isInline())
++		data->csi_->stop();
+ 
+ 	freeBuffers(camera);
+ }
+@@ -473,6 +483,13 @@ void CamssCameraData::queuePendingRequests()
+ 		if (!info)
+ 			break;
+ 
++		/* The pixel line captures the request's buffer directly */
++		if (isp_->isInline()) {
++			pendingRequests_.pop();
++			isp_->queueBuffers(request, nullptr);
++			continue;
++		}
++
+ 		/*
+ 		 * Queue a buffer on the CSI, using the raw stream buffer
+ 		 * provided in the request, if any, or a CIO2 internal buffer
+@@ -541,9 +558,13 @@ bool PipelineHandlerCamss::match(DeviceEnumerator *enumerator)
+ 		data->delayedCtrls_ =
+ 			std::make_unique<DelayedControls>(sensor->device(), params);
+ 
+-		data->isp_ = CamssIspOpe::match(this, enumerator, sensor,
+-						&data->frameInfos_,
++		data->isp_ = CamssIspIfe::match(this, data->csi_->csidVfeLink(),
++						sensor, &data->frameInfos_,
+ 						&data->controlInfo_);
++		if (data->isp_ == nullptr)
++			data->isp_ = CamssIspOpe::match(this, enumerator, sensor,
++							&data->frameInfos_,
++							&data->controlInfo_);
+ 		if (data->isp_ == nullptr) {
+ 			data->isp_ =
+ 				std::make_unique<CamssIspSoft>(this, sensor,
+diff --git a/src/libcamera/pipeline/camss/camss_csi.h b/src/libcamera/pipeline/camss/camss_csi.h
+index 81d87c3..d9ea7fa 100644
+--- a/src/libcamera/pipeline/camss/camss_csi.h
++++ b/src/libcamera/pipeline/camss/camss_csi.h
+@@ -58,6 +58,8 @@ public:
+ 	int start();
+ 	void stop();
+ 
++	MediaLink *csidVfeLink() const { return links_[CsidVfeLink].link; }
++
+ 	CameraSensor *sensor() { return sensor_.get(); }
+ 	const CameraSensor *sensor() const { return sensor_.get(); }
+ 
+diff --git a/src/libcamera/pipeline/camss/camss_isp.h b/src/libcamera/pipeline/camss/camss_isp.h
+index 55e967b..a03155f 100644
+--- a/src/libcamera/pipeline/camss/camss_isp.h
++++ b/src/libcamera/pipeline/camss/camss_isp.h
+@@ -29,6 +29,8 @@ public:
+ 	virtual ~CamssIsp() = 0;
+ 
+ 	virtual bool isValid() = 0;
++	/* Processes the live stream: no raw buffer goes through the CSI side */
++	virtual bool isInline() const { return false; }
+ 	virtual Size getMargins(PixelFormat inputFormat) = 0;
+ 
+ 	virtual StreamConfiguration generateConfiguration(const StreamConfiguration &raw) const = 0;
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+new file mode 100644
+index 0000000..36d096e
+--- /dev/null
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -0,0 +1,629 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Qualcomm CAMSS IFE inline pixel pipe ISP class
++ */
++
++#include "camss_isp_ife.h"
++
++#include <algorithm>
++#include <cmath>
++#include <stdlib.h>
++#include <string.h>
++
++#include <linux/media-bus-format.h>
++
++#include <libcamera/base/log.h>
++
++#include <libcamera/control_ids.h>
++#include <libcamera/controls.h>
++#include <libcamera/formats.h>
++#include <libcamera/request.h>
++#include <libcamera/stream.h>
++
++#include "libcamera/internal/camera_sensor.h"
++#include "libcamera/internal/dma_buf_allocator.h"
++#include "libcamera/internal/framebuffer.h"
++#include "libcamera/internal/ipa_manager.h"
++#include "libcamera/internal/media_device.h"
++#include "libcamera/internal/pipeline_handler.h"
++#include "libcamera/internal/request.h"
++#include "libcamera/internal/v4l2_videodevice.h"
++
++#include "camss_frames.h"
++#include "camss_params.h"
++
++namespace libcamera {
++
++LOG_DECLARE_CATEGORY(Camss)
++
++namespace {
++
++const std::map<PixelFormat, uint32_t> inputFormatToMediaBus = {
++	{ formats::SBGGR8, MEDIA_BUS_FMT_SBGGR8_1X8 },
++	{ formats::SGBRG8, MEDIA_BUS_FMT_SGBRG8_1X8 },
++	{ formats::SGRBG8, MEDIA_BUS_FMT_SGRBG8_1X8 },
++	{ formats::SRGGB8, MEDIA_BUS_FMT_SRGGB8_1X8 },
++	{ formats::SBGGR10_CSI2P, MEDIA_BUS_FMT_SBGGR10_1X10 },
++	{ formats::SGBRG10_CSI2P, MEDIA_BUS_FMT_SGBRG10_1X10 },
++	{ formats::SGRBG10_CSI2P, MEDIA_BUS_FMT_SGRBG10_1X10 },
++	{ formats::SRGGB10_CSI2P, MEDIA_BUS_FMT_SRGGB10_1X10 },
++};
++
++/* VFE pixel line pads */
++constexpr unsigned int kPixPadSink = 0;
++constexpr unsigned int kPixPadSrc = 1;
++
++/* Statistics sample every kStatsStep pixels of the central 2/3 of the frame */
++constexpr unsigned int kStatsStep = 4;
++
++/* The same curve as DebayerCpu::updateGammaTable() */
++std::array<uint8_t, 256> gammaLut(float gamma, float contrastExp)
++{
++	std::array<uint8_t, 256> lut;
++
++	for (unsigned int i = 0; i < lut.size(); i++) {
++		float x = i / 255.0f;
++
++		if (x < 0.5f)
++			x = 0.5f * std::pow(x / 0.5f, contrastExp);
++		else
++			x = 1.0f - 0.5f * std::pow((1.0f - x) / 0.5f, contrastExp);
++		lut[i] = std::clamp<long>(std::lround(255.0f * std::pow(x, gamma)), 0, 255);
++	}
++
++	return lut;
++}
++
++int16_t ccCoeff(float v)
++{
++	/* 12sQ8 */
++	return std::lround(std::clamp(v, -8.0f, 7.99f) * 256);
++}
++
++} /* namespace */
++
++/**
++ * \class CamssIspIfe
++ * \brief CAMSS ISP class for the inline pixel pipe of the VFE (IFE)
++ */
++
++CamssIspIfe::CamssIspIfe(PipelineHandler *pipe, const CameraSensor *sensor,
++			 CamssFrames *frameInfos, ControlInfoMap *ispControls)
++	: sensor_(sensor), frameInfos_(frameInfos),
++	  sharedParams_("camss_ife_params"), sharedStats_("camss_ife_stats")
++{
++	if (!sharedParams_ || !sharedStats_) {
++		LOG(Camss, Error) << "Failed to create shared memory";
++		return;
++	}
++
++	ipa_ = pipe->createIPA<ipa::softisp::IPAProxySoftIsp>(0, 0);
++	if (!ipa_) {
++		LOG(Camss, Error) << "Creating IPA failed";
++		return;
++	}
++
++	std::string ipaTuningFile =
++		ipa_->configurationFile(sensor->model() + ".yaml", "uncalibrated.yaml");
++
++	IPACameraSensorInfo sensorInfo{};
++	int ret = sensor->sensorInfo(&sensorInfo);
++	if (ret) {
++		LOG(Camss, Error) << "Camera sensor information not available";
++		ipa_.reset();
++		return;
++	}
++
++	bool ccmEnabled;
++	ret = ipa_->init(IPASettings{ ipaTuningFile, sensor->model() },
++			 sharedStats_.fd(), sharedParams_.fd(), sensorInfo,
++			 sensor->controls(), ispControls, &ccmEnabled);
++	if (ret) {
++		LOG(Camss, Error) << "IPA init failed";
++		ipa_.reset();
++		return;
++	}
++
++	ipa_->paramsComputed.connect(this, &CamssIspIfe::paramsComputed);
++	ipa_->metadataReady.connect(this,
++				    [&](uint32_t frame, const ControlList &metadata) {
++					    metadataReady.emit(frame, metadata);
++				    });
++	ipa_->setSensorControls.connect(this,
++					[&](const ControlList &sensorControls) {
++						setSensorControls.emit(sensorControls);
++					});
++}
++
++CamssIspIfe::~CamssIspIfe() = default;
++
++bool CamssIspIfe::isValid()
++{
++	return !!ipa_;
++}
++
++Size CamssIspIfe::getMargins([[maybe_unused]] PixelFormat inputFormat)
++{
++	return Size();
++}
++
++/*
++ * The pixel line belongs to the VFE whose RDI0 the CSI side picked for the
++ * sensor, and is fed from the same CSI decoder.
++ */
++int CamssIspIfe::init(MediaLink *csidRdiLink)
++{
++	MediaEntity *csid = csidRdiLink->source()->entity();
++	MediaEntity *rdi = csidRdiLink->sink()->entity();
++	MediaDevice *media = csid->device();
++	std::string name = rdi->name();
++
++	if (!isValid())
++		return -ENOMEM;
++
++	/* msm_vfeN_rdi0 -> msm_vfeN_pix, msm_vfeN_params */
++	std::string::size_type pos = name.rfind("_rdi0");
++	if (pos == std::string::npos)
++		return -ENODEV;
++	std::string vfe = name.substr(0, pos);
++
++	MediaEntity *pix = media->getEntityByName(vfe + "_pix");
++	MediaEntity *params = media->getEntityByName(vfe + "_params");
++	if (!pix || !params)
++		return -ENODEV;
++
++	for (const MediaPad *pad : csid->pads()) {
++		for (MediaLink *link : pad->links()) {
++			if (link->sink()->entity() == pix &&
++			    link->sink()->index() == kPixPadSink)
++				csidPixLink_ = link;
++		}
++	}
++
++	const MediaPad *src = pix->getPadByIndex(kPixPadSrc);
++	if (!csidPixLink_ || !src || src->links().empty())
++		return -ENODEV;
++
++	csidRdiLink_ = csidRdiLink;
++
++	pix_ = std::make_unique<V4L2Subdevice>(pix);
++	int ret = pix_->open();
++	if (ret)
++		return ret;
++
++	output_ = std::make_unique<V4L2VideoDevice>(src->links()[0]->sink()->entity());
++	ret = output_->open();
++	if (ret)
++		return ret;
++
++	params_ = std::make_unique<V4L2VideoDevice>(params);
++	ret = params_->open();
++	if (ret)
++		return ret;
++
++	output_->bufferReady.connect(this, &CamssIspIfe::outputReady);
++	params_->bufferReady.connect(this, &CamssIspIfe::parameterBufferReady);
++
++	return 0;
++}
++
++StreamConfiguration CamssIspIfe::generateConfiguration(const StreamConfiguration &raw) const
++{
++	if (!inputFormatToMediaBus.count(raw.pixelFormat)) {
++		LOG(Camss, Warning) << "Unsupported pixel format " << raw.pixelFormat;
++		return {};
++	}
++
++	/* No scaler on the line: NV12 at the sensor output size */
++	std::map<PixelFormat, std::vector<SizeRange>> formats = {
++		{ formats::NV12, { SizeRange(raw.size) } },
++	};
++
++	StreamConfiguration cfg{ StreamFormats{ formats } };
++	cfg.size = raw.size;
++	cfg.pixelFormat = formats::NV12;
++	cfg.bufferCount = kBufferCount;
++
++	return cfg;
++}
++
++StreamConfiguration CamssIspIfe::validate(const StreamConfiguration &raw,
++					  const StreamConfiguration &req) const
++{
++	if (!inputFormatToMediaBus.count(raw.pixelFormat))
++		return {};
++
++	StreamConfiguration cfg;
++	cfg.pixelFormat = formats::NV12;
++	cfg.size = raw.size;
++
++	V4L2DeviceFormat format;
++	format.fourcc = output_->toV4L2PixelFormat(cfg.pixelFormat);
++	format.size = cfg.size;
++
++	int ret = output_->tryFormat(&format);
++	if (ret < 0 || format.size != cfg.size) {
++		LOG(Camss, Error) << "IFE output try format failed";
++		return {};
++	}
++
++	cfg.stride = format.planes[0].bpl;
++	cfg.frameSize = 0;
++	for (unsigned int i = 0; i < format.planesCount; i++)
++		cfg.frameSize += format.planes[i].size;
++	cfg.bufferCount = std::max(kBufferCount, req.bufferCount);
++	cfg.setStream(const_cast<Stream *>(&outStream_));
++
++	return cfg;
++}
++
++int CamssIspIfe::configure(const StreamConfiguration &inputCfg,
++			   const StreamConfiguration &outputCfg,
++			   ControlInfoMap *ispControls)
++{
++	ipa::softisp::IPAConfigInfo configInfo;
++	configInfo.sensorControls = sensor_->controls();
++
++	int ret = ipa_->configure(configInfo, ispControls);
++	if (ret < 0)
++		return ret;
++
++	/* The CSI side links the decoder to RDI0; the pixel line takes over */
++	ret = csidRdiLink_->setEnabled(false);
++	if (ret)
++		return ret;
++
++	ret = csidPixLink_->setEnabled(true);
++	if (ret)
++		return ret;
++
++	V4L2SubdeviceFormat format;
++	format.code = inputFormatToMediaBus.at(inputCfg.pixelFormat);
++	format.size = inputCfg.size;
++	ret = pix_->setFormat(kPixPadSink, &format);
++	if (ret)
++		return ret;
++
++	format.code = MEDIA_BUS_FMT_YUYV8_1_5X8;
++	format.size = outputCfg.size;
++	ret = pix_->setFormat(kPixPadSrc, &format);
++	if (ret)
++		return ret;
++
++	V4L2DeviceFormat outputFormat;
++	outputFormat.fourcc = output_->toV4L2PixelFormat(outputCfg.pixelFormat);
++	outputFormat.size = outputCfg.size;
++	ret = output_->setFormat(&outputFormat);
++	if (ret)
++		return ret;
++
++	if (outputFormat.size != outputCfg.size ||
++	    outputFormat.planes[0].bpl != outputCfg.stride) {
++		LOG(Camss, Error) << "IFE output format mismatch";
++		return -EINVAL;
++	}
++
++	size_ = outputCfg.size;
++	stride_ = outputFormat.planes[0].bpl;
++	outputBufferCount_ = outputCfg.bufferCount;
++
++	return 0;
++}
++
++int CamssIspIfe::allocateBuffers(unsigned int bufferCount)
++{
++	int ret = output_->importBuffers(outputBufferCount_);
++	if (ret < 0)
++		return ret;
++
++	ret = params_->allocateBuffers(bufferCount, &paramBuffers_);
++	if (ret < 0) {
++		freeBuffers();
++		return ret;
++	}
++
++	for (const std::unique_ptr<FrameBuffer> &buffer : paramBuffers_)
++		mappedParams_.emplace(buffer.get(),
++				      MappedFrameBuffer(buffer.get(),
++							MappedFrameBuffer::MapFlag::ReadWrite));
++
++	frameInfos_->init(paramBuffers_, {}, true);
++
++	return 0;
++}
++
++void CamssIspIfe::freeBuffers()
++{
++	frameInfos_->clear();
++	mappedParams_.clear();
++	applied_.clear();
++	paramBuffers_.clear();
++	params_->releaseBuffers();
++	output_->releaseBuffers();
++}
++
++int CamssIspIfe::exportOutputBuffers([[maybe_unused]] const Stream *stream, unsigned int count,
++				     std::vector<std::unique_ptr<FrameBuffer>> *buffers)
++{
++	return output_->exportBuffers(count, buffers);
++}
++
++void CamssIspIfe::queueBuffers(Request *request, [[maybe_unused]] FrameBuffer *input)
++{
++	uint32_t frame = request->sequence();
++
++	ipa_->queueRequest(frame, request->controls());
++	ipa_->computeParams(frame);
++	/* paramsComputed() queues the buffers once the parameters are known */
++}
++
++void CamssIspIfe::paramsComputed(uint32_t frame)
++{
++	CamssFrames::Info *info = frameInfos_->find(frame);
++	if (!info)
++		return;
++
++	FrameBuffer *outputBuffer = info->request->findBuffer(&outStream_);
++	if (!outputBuffer) {
++		LOG(Camss, Error) << "Missing output buffer";
++		return;
++	}
++
++	const DebayerParams debayerParams = *sharedParams_;
++	Applied applied;
++
++	applied.gains = debayerParams.gains.max(0.0).min(31.0);
++	applied.blackLevel = std::clamp(debayerParams.blackLevel.g(), 0.0, 0.9);
++	applied.matrix = debayerParams.combinedMatrix;
++	applied.lut = gammaLut(debayerParams.gamma, debayerParams.contrastExp);
++
++	ipa::camss::CamssParams params(mappedParams_.at(info->paramBuffer).planes()[0]);
++
++	/* Gains in 15uQ10, the black level normalised to 16u */
++	auto wb = params.block<ipa::camss::CamssBlocks::AwbGains>();
++	wb->r_gain = std::lround(applied.gains.r() * 1024);
++	wb->g_gain = std::lround(applied.gains.g() * 1024);
++	wb->b_gain = std::lround(applied.gains.b() * 1024);
++	wb->r_sub = debayerParams.blackLevel.r() * 65535;
++	wb->g_sub = debayerParams.blackLevel.g() * 65535;
++	wb->b_sub = debayerParams.blackLevel.b() * 65535;
++	wb->r_add = 0;
++	wb->g_add = 0;
++	wb->b_add = 0;
++
++	/*
++	 * a[], b[] and c[] hold the green, blue and red input contributions
++	 * to the green, blue and red outputs, in that order.
++	 */
++	const Matrix<float, 3, 3> &m = applied.matrix;
++	auto cc = params.block<ipa::camss::CamssBlocks::ColorCorrect>();
++	cc->qfactor = 1;
++	cc->a[0] = ccCoeff(m[1][1]);
++	cc->a[1] = ccCoeff(m[2][1]);
++	cc->a[2] = ccCoeff(m[0][1]);
++	cc->b[0] = ccCoeff(m[1][2]);
++	cc->b[1] = ccCoeff(m[2][2]);
++	cc->b[2] = ccCoeff(m[0][2]);
++	cc->c[0] = ccCoeff(m[1][0]);
++	cc->c[1] = ccCoeff(m[2][0]);
++	cc->c[2] = ccCoeff(m[0][0]);
++	cc->k[0] = 0;
++	cc->k[1] = 0;
++	cc->k[2] = 0;
++
++	auto gamma = params.block<ipa::camss::CamssBlocks::Gamma>();
++	for (unsigned int i = 0; i < applied.lut.size(); i++) {
++		gamma->rlut[i] = applied.lut[i];
++		gamma->glut[i] = applied.lut[i];
++		gamma->blut[i] = applied.lut[i];
++	}
++
++	applied_[frame] = applied;
++	/* Keep the parameters of the frames still in flight */
++	while (applied_.size() > 2 * kBufferCount + 4)
++		applied_.erase(applied_.begin());
++
++	info->paramBuffer->_d()->metadata().planes()[0].bytesused = params.bytesused();
++	params_->queueBuffer(info->paramBuffer);
++	output_->queueBuffer(outputBuffer);
++}
++
++void CamssIspIfe::parameterBufferReady(FrameBuffer *buffer)
++{
++	CamssFrames::Info *info = frameInfos_->find(buffer);
++	if (!info)
++		return;
++
++	info->paramDequeued = true;
++
++	paramBufferReady.emit(buffer);
++}
++
++/*
++ * Statistics for the soft IPA describe the frame before the pipe: 8 bit
++ * sensor values, black level included. Undo the gamma curve, the colour
++ * correction and the gains that produced this frame. Linear operations
++ * commute with the sums, but not with the clipping of highlights, so the
++ * transform is applied per sample.
++ */
++void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &applied)
++{
++	const unsigned int stride = stride_;
++	const std::span<uint8_t> y = frame.planes()[0];
++	const std::span<uint8_t> uv = frame.planes().size() > 1 ?
++				      frame.planes()[1] :
++				      y.subspan(stride * size_.height);
++
++	/* Inverse of the gamma curve, as a linear value per 8 bit level */
++	std::array<float, 256> linear;
++	for (unsigned int v = 0, i = 0; v < linear.size(); v++) {
++		while (i < 255 && applied.lut[i] < v)
++			i++;
++		if (i == 0 || applied.lut[i] == applied.lut[i - 1]) {
++			linear[v] = i / 255.0f;
++			continue;
++		}
++		float t = (v - applied.lut[i - 1]) /
++			  static_cast<float>(applied.lut[i] - applied.lut[i - 1]);
++		linear[v] = (i - 1 + std::clamp(t, 0.0f, 1.0f)) / 255.0f;
++	}
++
++	bool ok;
++	Matrix<float, 3, 3> inv = applied.matrix.inverse(&ok);
++	if (!ok)
++		inv = Matrix<float, 3, 3>::identity();
++
++	const double bl = applied.blackLevel;
++	SwIspStats stats{};
++
++	const unsigned int x0 = (size_.width / 6) & ~1u;
++	const unsigned int y0 = (size_.height / 6) & ~1u;
++	const unsigned int x1 = size_.width - x0;
++	const unsigned int y1 = size_.height - y0;
++
++	for (unsigned int row = y0; row < y1; row += kStatsStep) {
++		const uint8_t *yl = &y[row * stride];
++		const uint8_t *cl = &uv[(row / 2) * stride];
++
++		for (unsigned int col = x0; col < x1; col += kStatsStep) {
++			const float l = yl[col];
++			const float cb = cl[col & ~1u] - 128.0f;
++			const float cr = cl[(col & ~1u) + 1] - 128.0f;
++
++			const float rgb[3] = {
++				l + 1.402f * cr,
++				l - 0.344136f * cb - 0.714136f * cr,
++				l + 1.772f * cb,
++			};
++
++			float lin[3];
++			for (unsigned int c = 0; c < 3; c++)
++				lin[c] = linear[std::clamp<long>(std::lround(rgb[c]), 0, 255)];
++
++			unsigned int raw[3];
++			for (unsigned int c = 0; c < 3; c++) {
++				double v = inv[c][0] * lin[0] + inv[c][1] * lin[1] +
++					   inv[c][2] * lin[2];
++				v /= std::max(applied.gains[c], 1e-3);
++				v = v * (1.0 - bl) + bl;
++				raw[c] = std::clamp<long>(std::lround(v * 255.0), 0, 255);
++			}
++
++			stats.sum_.r() += raw[0];
++			stats.sum_.g() += raw[1];
++			stats.sum_.b() += raw[2];
++
++			unsigned int luma = raw[0] * 77 + raw[1] * 150 + raw[2] * 29;
++			stats.yHistogram[luma * SwIspStats::kYHistogramSize / (256 * 256)]++;
++		}
++	}
++
++	stats.valid = true;
++	*sharedStats_ = stats;
++}
++
++void CamssIspIfe::outputReady(FrameBuffer *buffer)
++{
++	CamssFrames::Info *info = frameInfos_->find(buffer);
++	if (!info)
++		return;
++
++	Request *request = info->request;
++
++	if (buffer->metadata().status != FrameMetadata::FrameSuccess) {
++		/* No statistics will come for a cancelled frame */
++		info->metadataProcessed = true;
++		outputBufferReady.emit(buffer);
++		return;
++	}
++
++	request->_d()->metadata().set(controls::SensorTimestamp,
++				      buffer->metadata().timestamp);
++
++	auto it = applied_.find(info->id);
++	if (it != applied_.end()) {
++		DmaSyncer sync(buffer->planes()[0].fd, DmaSyncer::SyncType::Read);
++		MappedFrameBuffer mapped(buffer, MappedFrameBuffer::MapFlag::Read);
++
++		if (mapped.isValid())
++			computeStats(mapped, it->second);
++		else
++			LOG(Camss, Error) << "Failed to map the IFE output";
++	}
++
++	statsReady.emit(info->id, 0);
++	outputBufferReady.emit(buffer);
++}
++
++void CamssIspIfe::processStats(const uint32_t frame, const uint32_t statsBufferId,
++			       const ControlList &sensorControls)
++{
++	ipa_->processStats(frame, statsBufferId, sensorControls);
++}
++
++int CamssIspIfe::start()
++{
++	int ret = ipa_->start();
++	if (ret)
++		return ret;
++
++	/* Parameters queued before the line starts are applied at its start */
++	ret = params_->streamOn();
++	if (ret < 0) {
++		ipa_->stop();
++		return ret;
++	}
++
++	ret = output_->streamOn();
++	if (ret < 0) {
++		params_->streamOff();
++		ipa_->stop();
++		return ret;
++	}
++
++	return 0;
++}
++
++void CamssIspIfe::stop()
++{
++	output_->streamOff();
++	params_->streamOff();
++	ipa_->stop();
++}
++
++/**
++ * \brief Create the IFE ISP for a camera if its VFE has a pixel line
++ * \param[in] pipe The pipeline handler in use
++ * \param[in] csidRdiLink The CSI decoder to VFE RDI0 link the camera uses
++ * \param[in] sensor Pointer to the CameraSensor instance owned by the pipeline
++ * \param[in] frameInfos Pointer to CamssFrames instance owned by the pipeline
++ * \param[out] ispControls ControlInfoMap to which to add ISP provided controls
++ *
++ * Setting LIBCAMERA_CAMSS_IFE=0 in the environment disables the IFE.
++ */
++std::unique_ptr<CamssIspIfe> CamssIspIfe::match(PipelineHandler *pipe,
++						MediaLink *csidRdiLink,
++						const CameraSensor *sensor,
++						CamssFrames *frameInfos,
++						ControlInfoMap *ispControls)
++{
++	const char *env = getenv("LIBCAMERA_CAMSS_IFE");
++	if (env && !strcmp(env, "0"))
++		return nullptr;
++
++	auto ife = std::make_unique<CamssIspIfe>(pipe, sensor, frameInfos, ispControls);
++
++	int ret = ife->init(csidRdiLink);
++	if (ret) {
++		LOG(Camss, Info) << "No IFE pixel line for " << sensor->entity()->name()
++				 << ": " << strerror(-ret);
++		return nullptr;
++	}
++
++	LOG(Camss, Info) << "Using IFE " << ife->pix_->entity()->name()
++			 << " for " << sensor->entity()->name();
++
++	return ife;
++}
++
++} /* namespace libcamera */
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.h b/src/libcamera/pipeline/camss/camss_isp_ife.h
+new file mode 100644
+index 0000000..3ee3974
+--- /dev/null
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.h
+@@ -0,0 +1,115 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Qualcomm CAMSS IFE inline pixel pipe ISP class
++ */
++
++#pragma once
++
++#include <array>
++#include <map>
++#include <memory>
++#include <vector>
++
++#include <libcamera/ipa/softisp_ipa_interface.h>
++#include <libcamera/ipa/softisp_ipa_proxy.h>
++
++#include "libcamera/internal/mapped_framebuffer.h"
++#include "libcamera/internal/matrix.h"
++#include "libcamera/internal/shared_mem_object.h"
++#include "libcamera/internal/software_isp/debayer_params.h"
++#include "libcamera/internal/software_isp/swisp_stats.h"
++#include "libcamera/internal/v4l2_subdevice.h"
++#include "libcamera/internal/vector.h"
++
++#include "camss_isp.h"
++
++namespace libcamera {
++
++class CameraSensor;
++class CamssFrames;
++class ControlInfoMap;
++class MediaEntity;
++class MediaLink;
++class PipelineHandler;
++class V4L2VideoDevice;
++
++/*
++ * The pixel line of the VFE that receives the sensor processes the frame on
++ * its way to memory: NV12 is captured straight from the line, there is no
++ * raw buffer. The soft IPA computes the parameters, its statistics come
++ * from the NV12 frames with the parameters that produced them undone.
++ */
++class CamssIspIfe : public CamssIsp
++{
++public:
++	static std::unique_ptr<CamssIspIfe> match(PipelineHandler *pipe,
++						  MediaLink *csidRdiLink,
++						  const CameraSensor *sensor,
++						  CamssFrames *frameInfos,
++						  ControlInfoMap *ispControls);
++
++	CamssIspIfe(PipelineHandler *pipe, const CameraSensor *sensor,
++		    CamssFrames *frameInfos, ControlInfoMap *ispControls);
++	~CamssIspIfe() override;
++
++	bool isValid() override;
++	bool isInline() const override { return true; }
++	Size getMargins(PixelFormat inputFormat) override;
++
++	StreamConfiguration generateConfiguration(const StreamConfiguration &raw) const override;
++	StreamConfiguration validate(const StreamConfiguration &raw,
++				     const StreamConfiguration &req) const override;
++	int configure(const StreamConfiguration &inputCfg,
++		      const StreamConfiguration &outputCfg,
++		      ControlInfoMap *ispControls) override;
++
++	int allocateBuffers(unsigned int bufferCount) override;
++	void freeBuffers() override;
++	int exportOutputBuffers(const Stream *stream, unsigned int count,
++				std::vector<std::unique_ptr<FrameBuffer>> *buffers) override;
++	void queueBuffers(Request *request, FrameBuffer *input) override;
++
++	void processStats(const uint32_t frame, const uint32_t statsBufferId,
++			  const ControlList &sensorControls) override;
++
++	int start() override;
++	void stop() override;
++
++private:
++	/* What the pixel pipe applied to a frame, to undo it for statistics */
++	struct Applied {
++		RGB<double> gains;
++		double blackLevel;
++		Matrix<float, 3, 3> matrix;
++		std::array<uint8_t, 256> lut;
++	};
++
++	int init(MediaLink *csidRdiLink);
++	void paramsComputed(uint32_t frame);
++	void parameterBufferReady(FrameBuffer *buffer);
++	void outputReady(FrameBuffer *buffer);
++	void computeStats(const MappedFrameBuffer &frame, const Applied &applied);
++
++	const CameraSensor *sensor_;
++	CamssFrames *frameInfos_;
++
++	MediaLink *csidRdiLink_ = nullptr;
++	MediaLink *csidPixLink_ = nullptr;
++	std::unique_ptr<V4L2Subdevice> pix_;
++	std::unique_ptr<V4L2VideoDevice> output_;
++	std::unique_ptr<V4L2VideoDevice> params_;
++
++	SharedMemObject<DebayerParams> sharedParams_;
++	SharedMemObject<SwIspStats> sharedStats_;
++	std::unique_ptr<ipa::softisp::IPAProxySoftIsp> ipa_;
++
++	std::vector<std::unique_ptr<FrameBuffer>> paramBuffers_;
++	std::map<FrameBuffer *, MappedFrameBuffer> mappedParams_;
++	std::map<uint32_t, Applied> applied_;
++
++	Size size_;
++	unsigned int stride_ = 0;
++	unsigned int outputBufferCount_ = 0;
++};
++
++} /* namespace libcamera */
+diff --git a/src/libcamera/pipeline/camss/meson.build b/src/libcamera/pipeline/camss/meson.build
+index cffb53e..e00cfc3 100644
+--- a/src/libcamera/pipeline/camss/meson.build
++++ b/src/libcamera/pipeline/camss/meson.build
+@@ -5,6 +5,7 @@ libcamera_internal_sources += files([
+     'camss_csi.cpp',
+     'camss_frames.cpp',
+     'camss_isp.cpp',
++    'camss_isp_ife.cpp',
+     'camss_isp_ope.cpp',
+     'camss_isp_soft.cpp',
+     'camss_util.cpp',
+-- 
+2.55.0
+
