@@ -14,6 +14,7 @@ SSC is reached over QRTR (QMI service 400) with hand-made protobuf, as the
 messages are tiny and fixed.
 """
 import glob
+import signal
 import socket
 import struct
 import sys
@@ -207,6 +208,22 @@ def sensor_status():
 def main():
     status = None
     ssc = suid = None
+    # Stop the OIS loop on the SLPI when systemd stops us mid-stream.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        loop(status, ssc, suid)
+    finally:
+        if STATE["ssc"] is not None:
+            try:
+                STATE["ssc"].send(STATE["suid"], MSGID_DISABLE, b"")
+            except OSError:
+                pass
+
+
+STATE = {"ssc": None, "suid": None}
+
+
+def loop(status, ssc, suid):
     while True:
         if status is None:
             status = sensor_status()
@@ -240,6 +257,7 @@ def main():
             ssc = None
             print("OIS off", flush=True)
 
+        STATE["ssc"], STATE["suid"] = ssc, suid
         if ssc is not None:
             # Keep the client socket serviced; the SSC sends nothing we need.
             for _ in ssc.drain(POLL_S):
