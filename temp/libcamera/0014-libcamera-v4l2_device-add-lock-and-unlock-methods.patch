@@ -1,7 +1,7 @@
 From ea8a347317a56b1063bd16841f1af6b49439d978 Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Fri, 3 Apr 2026 19:24:52 +0200
-Subject: [PATCH 14/24] libcamera: v4l2_device: add lock() and unlock() methods
+Subject: [PATCH 14/25] libcamera: v4l2_device: add lock() and unlock() methods
 
 Add lock() and unlock() methods to allow pipeline-handlers to do more
 fine grained locking the locking at the media-device label.

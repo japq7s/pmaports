@@ -1,7 +1,7 @@
 From 7d7fb43eee11882f68764f03c6e65a694c49b592 Mon Sep 17 00:00:00 2001
 From: Emilio Miranda <gemilio@gmail.com>
 Date: Tue, 25 Aug 2026 14:06:30 +0200
-Subject: [PATCH 04/24] ipa: simple: Derive AGC minimum gain step from sensor
+Subject: [PATCH 04/25] ipa: simple: Derive AGC minimum gain step from sensor
  granularity
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8

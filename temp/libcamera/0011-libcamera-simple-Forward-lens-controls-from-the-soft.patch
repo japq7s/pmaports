@@ -1,7 +1,7 @@
 From 1f744c74955e2931b536dfde064a3089f54a57e3 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Sun, 18 Oct 2026 14:30:05 +0200
-Subject: [PATCH 11/24] libcamera: simple: Forward lens controls from the soft
+Subject: [PATCH 11/25] libcamera: simple: Forward lens controls from the soft
  IPA
 
 The simple pipeline handler never drives the focus lens of the sensor,

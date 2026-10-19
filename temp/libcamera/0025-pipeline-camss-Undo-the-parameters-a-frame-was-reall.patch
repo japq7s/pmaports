@@ -1,0 +1,102 @@
+From 160ae8959f907ffb901024d70bd77520d4052a2e Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 18:46:22 +0200
+Subject: [PATCH 25/25] pipeline: camss: Undo the parameters a frame was really
+ processed with
+
+The statistics of a frame were computed with the parameters of its
+request undone. The driver applies a parameters buffer when an image
+frame completes, while the output buffers are handed to the write
+masters ahead, so a frame is processed with parameters a few requests
+older than its own. With the v0.7.2 soft IPA, whose AWB takes each
+measurement as it comes, the error fed back and the colours flickered
+from frame to frame (B/G from 0.03 to 1.27 within 40 frames).
+
+The driver returns a parameters buffer with the sequence of the first
+frame it affects. Keep the parameters by that sequence and undo, for
+each frame, the latest ones applied at or before it; frames before the
+first applied parameters carry no statistics.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../pipeline/camss/camss_isp_ife.cpp          | 28 +++++++++++++++++--
+ src/libcamera/pipeline/camss/camss_isp_ife.h  |  2 ++
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 76a6e0f..7b5dc00 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -349,6 +349,7 @@ void CamssIspIfe::freeBuffers()
+ 	frameInfos_->clear();
+ 	mappedParams_.clear();
+ 	applied_.clear();
++	effective_.clear();
+ 	paramBuffers_.clear();
+ 	params_->releaseBuffers();
+ 	output_->releaseBuffers();
+@@ -472,6 +473,19 @@ void CamssIspIfe::parameterBufferReady(FrameBuffer *buffer)
+ 
+ 	info->paramDequeued = true;
+ 
++	/*
++	 * The driver returns a parameters buffer when it applies it, with
++	 * the sequence of the first frame it affects: frames already in
++	 * flight still carry older parameters.
++	 */
++	auto it = applied_.find(info->id);
++	if (it != applied_.end() &&
++	    buffer->metadata().status == FrameMetadata::FrameSuccess) {
++		effective_[buffer->metadata().sequence] = it->second;
++		while (effective_.size() > 2 * kBufferCount + 4)
++			effective_.erase(effective_.begin());
++	}
++
+ 	paramBufferReady.emit(buffer);
+ }
+ 
+@@ -598,17 +612,25 @@ void CamssIspIfe::outputReady(FrameBuffer *buffer)
+ 	request->_d()->metadata().set(controls::SensorTimestamp,
+ 				      buffer->metadata().timestamp);
+ 
+-	auto it = applied_.find(info->id);
+-	if (it != applied_.end()) {
++	/* The latest parameters applied at or before this frame */
++	const Applied *applied = nullptr;
++	auto eff = effective_.upper_bound(buffer->metadata().sequence);
++	if (eff != effective_.begin())
++		applied = &std::prev(eff)->second;
++
++	if (applied) {
+ 		DmaSyncer sync(buffer->planes()[0].fd, DmaSyncer::SyncType::Read);
+ 		MappedFrameBuffer mapped(buffer, MappedFrameBuffer::MapFlag::Read);
+ 
+ 		if (mapped.isValid())
+-			computeStats(mapped, it->second);
++			computeStats(mapped, *applied);
+ 		else
+ 			LOG(Camss, Error) << "Failed to map the IFE output";
+ 	}
+ 
++	if (!applied)
++		sharedStats_->valid = false;
++
+ 	statsReady.emit(info->id, 0);
+ 	outputBufferReady.emit(buffer);
+ }
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.h b/src/libcamera/pipeline/camss/camss_isp_ife.h
+index 823d7e9..377362f 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.h
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.h
+@@ -112,6 +112,8 @@ private:
+ 	std::vector<std::unique_ptr<FrameBuffer>> paramBuffers_;
+ 	std::map<FrameBuffer *, MappedFrameBuffer> mappedParams_;
+ 	std::map<uint32_t, Applied> applied_;
++	/* Parameters by the sequence of the first frame they apply to */
++	std::map<uint32_t, Applied> effective_;
+ 
+ 	Size size_;
+ 	unsigned int stride_ = 0;
+-- 
+2.55.0
+
