@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=30
+pkgrel=31
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -32,10 +32,11 @@ depends="
 	fastrpc
 	fastrpc-systemd
 	fastrpc-udev
-	hexagonrpcd
+	hexagonrpcd>=0.4.0-r100
 	hexagonrpcd-systemd
 	hexagonrpcd-udev
 	libssc
+	python3
 "
 makedepends="devicepkg-dev"
 # The PAL nodes live in the sound server: one subpackage per audio backend,
@@ -73,6 +74,9 @@ source="
 	senna-sensors-setup.service
 	hexagonrpcd-sdsp-senna.conf
 	sns_reg.conf
+	senna-ois
+	senna-ois.service
+	self_ois.ocfg
 	senna-voice-volume
 	audio-pal-card.conf
 	audio-backend_conf.xml
@@ -129,6 +133,12 @@ package() {
 	# hexagonrpcd looks its files up by SoC, model vendor and compatible.
 	local _hfs="$pkgdir"/usr/share/qcom/sm8475/realme/senna-b
 	install -Dm644 "$srcdir"/sns_reg.conf "$_hfs"/sensors/sns_reg.conf
+	# Main camera OIS runs on the SLPI: it reads /odm/etc/camera/self_ois.ocfg
+	# (hexagonrpcd maps it to camera/) and is started by senna-ois.
+	install -Dm644 "$srcdir"/self_ois.ocfg "$_hfs"/camera/self_ois.ocfg
+	install -Dm755 "$srcdir"/senna-ois "$pkgdir"/usr/libexec/senna-ois
+	install -Dm644 "$srcdir"/senna-ois.service \
+		"$pkgdir"/usr/lib/systemd/system/senna-ois.service
 	mkdir -p "$_hfs"/acdb "$_hfs"/dsp "$_hfs"/socinfo
 	ln -s /var/lib/senna-sensors/registry "$_hfs"/sensors/registry
 	ln -s /var/lib/senna-sensors/sdsp "$_hfs"/dsp/sdsp
@@ -258,7 +268,7 @@ f1640277ea91695b66d1e4bb01921fed95569d589d1ba5716803a44c3753a8d8a455e636958107b3
 24f9a94de7d01763435b8f3c65a65cf018b28608517f9f212405eae764ec23c5bcbe69fb2cbe44a1ee0d6c85b76924feceb5e4a73a19cb29791c0f6ad737b265  wireplumber-senna.conf
 2ae28242250408247f423da72b7cc9aeb94cb2dd1bcdea8fc22b5725918a16368283cf1556de9e5a5470c7ed153050a69ea28a2506dd8c4775a9fcf7f50cec08  61-senna-fastrpc-sdsp.rules
 e2c113899cf6a375cf1bf75ef418b984fe7e3873bdd85126415d1c4b7d6b9f9f18b3fcf6358bc3bc1f08007625824d53bbb30a8ec8a31f1c40d09d7ff9141dbe  81-libssc-senna.rules
-c1b46504b0da6c48e08bcb78ecef440bd387ed374c8e3ad21dcfc4b18a8ff91e6d030e61fa80e6807bfcff07164d37cb3186a2c471cd5a4a9bec89807bfb703f  80-senna.preset
+ddd649d78a2d6de0ca61f4bfb56ef1dd46ad467dc3f5a75518be8043dc76bb4c3382c72f8179c8b5ed509ac5b432529d798f3ed811c8cff858d64d9b0c4efff5  80-senna.preset
 454f10261d834dccd61e1315a5b42dacbe7f592ec29d8af45cc04c1a8f5e01dbe7d50ebe64b88ae6d0113aebe112cbffcf71766c53072ef5d2c04b9837c61183  senna-mark-boot-successful
 f4b93fc97eaef0e1a1211a2f3fe2af4070e8e1206fef37435fd9cae55a4e77e8239cec95e2505347ef0c37553438c7e0a5e34e150484b15d999f8efb0084d04f  senna-mark-boot-successful.service
 ba7408847e1c3699af78e1f3f16e8777ee40a8a6b78616326728ba6b777c55c633ae3790efcc4e94ec816b8829e115adb963fffda0878efee1bddabbf34874d9  senna-mark-boot-successful.timer
@@ -266,6 +276,9 @@ fa06c255d0981fabb4c8a4350a469ad5e67314ef300338d97511699915f75972de6d769e5ded825f
 0a212ac11f269fc3c32372bfc1b175c30711f0d381abaaaf2804256b05f6d981a5b43cfc19c400dd30a5dbfe54c32b7dd69c6c90bec2ae0a389c8eabef387a8b  senna-sensors-setup.service
 8e5e2b326546845efa81f689c2b92d33c3898eb989276813a532067218b7a015dc487a1ea4e5a0a97f494cc380efeaed793a66ffecde44968fee58dc2b0fd15e  hexagonrpcd-sdsp-senna.conf
 6b7fb668ddf07ebd4032212cfefe21474c6eb00aa77f166182e475f729b0f8ca49a191d996a40f2c8227c452675cb0895ac1c84daf84f935261f9c20cc734705  sns_reg.conf
+94dff8acfdd636ae9a0be8350a534c5d8fd9b692e38fde079afb4fe7de539315654f1c8f7cec20b5d02899419397d037a5743bd74e41ab99da8c3c6e1b754169  senna-ois
+fbe9cc72fb74e7de10b40adb88ed30ac2f76bdc7fe4704f7a1e8acbd97a44fdc54242dd79459041700f7e000812004af31b5cf4eec48adcb962a48740b2101bc  senna-ois.service
+1f2331b789472ab51bbd4e711dc66b303960490846236ee6140cd0263e2fcf3fc48b616e4db1279d21177040edebdf25a4100b5071ec11497884531faf351b3c  self_ois.ocfg
 f76db3aacf0afe101df75e0f3e330ce860aa01149be256a62b5ab3027ce4826066486e4a8f881edf61f232566ed9b671d43963c51e95560d1d281bdb680ea13b  senna-voice-volume
 9e3771a41447116eeff8ff2f5473c81ca294aeae6a154af14874b09e43f77ede8dd13bb0c459445be4d61bd8362fdbfe8c9b4d7eb91db65c62e5f1580d333712  audio-pal-card.conf
 eeb5ebf1d618bf86d8baa8f9c1fc75aaf1b664fccadbd797ec8cbb9919875d5a63cc08e4816264395b1950669741f7a45f780b46413bc88f624ceb743df5de32  audio-backend_conf.xml

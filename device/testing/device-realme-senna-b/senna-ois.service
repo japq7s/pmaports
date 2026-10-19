@@ -1,0 +1,13 @@
+[Unit]
+Description=Main camera OIS (SLPI ois_system) while the IMX890 streams
+Wants=hexagonrpcd-sdsp.service
+After=hexagonrpcd-sdsp.service
+
+[Service]
+ExecStart=/usr/libexec/senna-ois
+DynamicUser=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

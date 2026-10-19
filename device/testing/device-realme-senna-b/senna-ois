@@ -1,0 +1,252 @@
+#!/usr/bin/python3
+# SPDX-License-Identifier: MIT
+"""
+Optical image stabilisation for the IMX890 (main camera).
+
+The OIS loop of this phone runs on the SLPI: the "ois_system" SSC sensor
+reads the gyro and drives the OIS chip. Linux only has to start it while
+the main camera streams. This daemon follows the runtime PM state of the
+imx890 I2C device and sends SNS_OIS_SYSTEM_MSGID_START (with the stock
+CamX default parameters) when it becomes active and a disable request
+when it suspends again.
+
+SSC is reached over QRTR (QMI service 400) with hand-made protobuf, as the
+messages are tiny and fixed.
+"""
+import glob
+import socket
+import struct
+import sys
+import time
+
+AF_QIPCRTR = 42
+QRTR_PORT_CTRL = 0xfffffffe
+QRTR_TYPE_NEW_LOOKUP = 10
+QRTR_TYPE_NEW_SERVER = 4
+SNS_CLIENT_SVC = 400
+SNS_CLIENT_REQ = 0x20
+
+SUID_LOOKUP = 0xABABABABABABABAB
+MSGID_SUID_REQ = 512
+MSGID_SUID_EVENT = 768
+MSGID_DISABLE = 10
+MSGID_OIS_START = 524
+
+# Mode 1 does not stabilise (the SLPI skips it); 3 measured best of
+# 0/2/3/10/14/255 (frame-to-frame jitter 12.1 px -> 3.1 px handheld).
+OIS_MODE = 3
+
+# sns_oisparams_config fields 1..24, from CamX InitOISParams defaults:
+# f2 mode, f4/f5 1600, f6/f7 gain 10000, f8/f9 delay 10, f10-f12 offset 0,
+# f13 work frequency 1000, f14 500, f15 algo vendor 3, f16 gyro direction 3,
+# f19-f22 sth 10/9/6/6, f23 use_ocs 1.
+OIS_CONFIG = [0, OIS_MODE, 0, 1600, 1600, 10000, 10000, 10, 10, 0, 0, 0,
+              1000, 500, 3, 3, 0, 0, 10, 9, 6, 6, 1, 0]
+
+POLL_S = 1.0
+
+
+def varint(v):
+    out = b""
+    while True:
+        b = v & 0x7f
+        v >>= 7
+        if not v:
+            return out + bytes([b])
+        out += bytes([b | 0x80])
+
+
+def f_varint(n, v):
+    return varint(n << 3) + varint(v)
+
+
+def f_bytes(n, b):
+    return varint(n << 3 | 2) + varint(len(b)) + b
+
+
+def f_fixed32(n, v):
+    return varint(n << 3 | 5) + struct.pack("<I", v)
+
+
+def f_fixed64(n, v):
+    return varint(n << 3 | 1) + struct.pack("<Q", v)
+
+
+def pb_parse(buf):
+    i, out = 0, []
+    while i < len(buf):
+        k = s = 0
+        while True:
+            c = buf[i]
+            i += 1
+            k |= (c & 0x7f) << s
+            s += 7
+            if not c & 0x80:
+                break
+        n, wt = k >> 3, k & 7
+        if wt == 0:
+            v = s = 0
+            while True:
+                c = buf[i]
+                i += 1
+                v |= (c & 0x7f) << s
+                s += 7
+                if not c & 0x80:
+                    break
+        elif wt == 1:
+            v = struct.unpack_from("<Q", buf, i)[0]
+            i += 8
+        elif wt == 5:
+            v = struct.unpack_from("<I", buf, i)[0]
+            i += 4
+        elif wt == 2:
+            ln = s = 0
+            while True:
+                c = buf[i]
+                i += 1
+                ln |= (c & 0x7f) << s
+                s += 7
+                if not c & 0x80:
+                    break
+            v = buf[i:i + ln]
+            i += ln
+        else:
+            raise ValueError(f"wire type {wt}")
+        out.append((n, v))
+    return out
+
+
+class Ssc:
+    def __init__(self):
+        self.s = socket.socket(AF_QIPCRTR, socket.SOCK_DGRAM)
+        self.s.settimeout(2)
+        node = self.s.getsockname()[0]
+        self.s.sendto(struct.pack("<IIII", QRTR_TYPE_NEW_LOOKUP,
+                                  SNS_CLIENT_SVC, 0, 0),
+                      (node, QRTR_PORT_CTRL))
+        self.srv = None
+        while True:
+            d, _ = self.s.recvfrom(4096)
+            cmd, svc, _, nd, port = struct.unpack_from("<IIIII", d)
+            if cmd != QRTR_TYPE_NEW_SERVER:
+                continue
+            if svc == 0 and nd == 0:
+                break               # end of the lookup list
+            if svc == SNS_CLIENT_SVC:
+                self.srv = (nd, port)
+        if not self.srv:
+            self.s.close()
+            raise OSError("SSC service not found")
+        self.txn = 1
+
+    def close(self):
+        self.s.close()
+
+    def send(self, suid, msg_id, payload):
+        req = f_bytes(1, f_fixed64(1, suid[0]) + f_fixed64(2, suid[1]))
+        req += f_fixed32(2, msg_id)
+        req += f_bytes(3, f_varint(1, 1) + f_varint(2, 0))  # APSS, wakeup
+        req += f_bytes(4, f_bytes(2, payload) if payload else b"")
+        tlv = bytes([1]) + struct.pack("<HH", len(req) + 2, len(req)) + req
+        tlv += bytes([0x10, 1, 0, 1])                         # jumbo reports
+        hdr = struct.pack("<BHHH", 0, self.txn, SNS_CLIENT_REQ, len(tlv))
+        self.txn = (self.txn + 1) & 0xffff or 1
+        self.s.sendto(hdr + tlv, self.srv)
+
+    def drain(self, timeout):
+        """Yield (msg_id, payload) of the events received within timeout."""
+        end = time.monotonic() + timeout
+        while True:
+            left = end - time.monotonic()
+            if left <= 0:
+                return
+            self.s.settimeout(left)
+            try:
+                d, _ = self.s.recvfrom(65536)
+            except socket.timeout:
+                return
+            typ, _, mid, _ = struct.unpack_from("<BHHH", d)
+            if typ == 2 or mid not in (0x21, 0x22):
+                continue
+            tl, o = d[7:], 0
+            while o + 3 <= len(tl):
+                t = tl[o]
+                ln = struct.unpack_from("<H", tl, o + 1)[0]
+                if t == 2:
+                    for n, v in pb_parse(tl[o + 5:o + 3 + ln]):
+                        if n == 2:
+                            ev = dict(pb_parse(v))
+                            yield ev.get(1), ev.get(3, b"")
+                o += 3 + ln
+
+    def find(self, data_type):
+        self.send((SUID_LOOKUP, SUID_LOOKUP), MSGID_SUID_REQ,
+                  f_bytes(1, data_type) + f_varint(2, 0) + f_varint(3, 0))
+        for mid, payload in self.drain(2):
+            if mid != MSGID_SUID_EVENT:
+                continue
+            for n, v in pb_parse(payload):
+                if n == 2:
+                    s = dict(pb_parse(v))
+                    return s[1], s[2]
+        return None
+
+
+def ois_config():
+    return b"".join(f_varint(i + 1, v) for i, v in enumerate(OIS_CONFIG))
+
+
+def sensor_status():
+    for name in glob.glob("/sys/bus/i2c/devices/*/name"):
+        with open(name) as f:
+            if f.read().strip() == "imx890":
+                return name[:-4] + "power/runtime_status"
+    return None
+
+
+def main():
+    status = None
+    ssc = suid = None
+    while True:
+        if status is None:
+            status = sensor_status()
+        streaming = False
+        if status:
+            try:
+                with open(status) as f:
+                    streaming = f.read().strip() == "active"
+            except OSError:
+                status = None
+
+        if streaming and ssc is None:
+            try:
+                ssc = Ssc()
+                suid = suid or ssc.find(b"ois_system")
+                if suid is None:
+                    raise OSError("no ois_system sensor")
+                ssc.send(suid, MSGID_OIS_START, ois_config())
+                print(f"OIS on (mode {OIS_MODE})", flush=True)
+            except OSError as e:
+                print(f"OIS start failed: {e}", file=sys.stderr, flush=True)
+                if ssc:
+                    ssc.close()
+                ssc = None
+        elif not streaming and ssc is not None:
+            try:
+                ssc.send(suid, MSGID_DISABLE, b"")
+            except OSError:
+                pass
+            ssc.close()
+            ssc = None
+            print("OIS off", flush=True)
+
+        if ssc is not None:
+            # Keep the client socket serviced; the SSC sends nothing we need.
+            for _ in ssc.drain(POLL_S):
+                pass
+        else:
+            time.sleep(POLL_S)
+
+
+if __name__ == "__main__":
+    main()

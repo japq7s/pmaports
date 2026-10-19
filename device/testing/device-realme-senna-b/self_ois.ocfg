@@ -1,0 +1,48 @@
+{
+    "Ver": "3.1.1.1",
+    "OIS_LOG": 0,
+    "ACC": {
+        "gyro_orien_matrix": [1, 0, 0, 0, 1, 0, 0, 0, 1],
+        "acc_orien_matrix": [1, 0, 0, 0, 1, 0, 0, 0, -1],
+        "GYRO_FULL_SCALE": 124,
+        "ACC_FULL_SCALE": 2,
+        "HPF_CUTOFF_X": [0.7, 0.9, 1.1, 1.3, 1.5, 1.7],
+        "HPF_CUTOFF_Y": [0.5, 0.7, 0.9, 1.1, 1.3, 1.5],
+        "BPF_CUTOFF_LOW_X": 1.3,
+        "BPF_CUTOFF_LOW_Y": 1.3,
+        "BPF_CUTOFF_HIGH_X": 70.0,
+        "BPF_CUTOFF_HIGH_Y": 70.0,
+        "BPF_GAIN_X": [-27000.0, -15000.0, -9700.0, -6500.0, -4900.0, -4100.0],
+        "BPF_GAIN_Y": [-20000.0, -12000.0, -7500.0, -5500.0, -4300.0, -3500.0],
+        "SHIFT_LIMIT": 5.0,
+        "RESET_TIME": 0.5
+    },
+    "Fusion": {
+        "OIS_WORK_MODE": 2,
+        "DEFAULT_CENTER": 2048,
+        "OCS_ENABLE": 0,
+        "CODE_LIMIT_X": 1200,
+        "CODE_LIMIT_Y": 1200,
+        "ACC_GAIN_X": 233,
+        "ACC_GAIN_Y": 233,
+        "CALIB_OBJDIS": 300,
+        "ACC_WORK_MIN": 800,
+        "ACC_WORK_MAX": 900,
+        "FUSION_THETA_LIMIT": 0.6,
+        "FUSION_SHIFT_LIMIT": 3.0
+    },
+    "Pulse": {
+        "EXP_LIMIT_30FPS": 16888888,
+        "EXP_LIMIT_60FPS": 7000001,
+        "VSYNC_OFFSET_30FPS": 6,
+        "VSYNC_VTIME_30FPS": 26,
+        "VSYNC_OFFSET_60FPS": 2,
+        "VSYNC_VTIME_60FPS": 16
+    },
+    "PidConfig": {
+        "x_old_pid": [70, 68, 215, 36, 19, 40, 255, 64, 128, 194, 124, 125, 95, 8, 29, 238, 40, 9, 224, 146, 146, 248],
+        "x_pid_params": [40, 40, 240, 40, 15, 40, 255, 80, 128, 194, 124, 125, 95, 8, 29, 238, 40, 9, 224, 146, 146, 248],
+        "y_old_pid": [50, 55, 220, 32, 18, 40, 255, 55, 128, 193, 70, 126, 145, 14, 193, 224, 108, 16, 252, 146, 146, 248],
+        "y_pid_params": [30, 40, 240, 25, 25, 40, 255, 95, 128, 194, 58, 125, 167, 19, 125, 213, 237, 22, 181, 146, 146, 248]
+    }
+}
