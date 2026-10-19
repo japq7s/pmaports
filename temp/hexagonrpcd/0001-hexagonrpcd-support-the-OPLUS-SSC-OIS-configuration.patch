@@ -1,0 +1,200 @@
+From 850400c7f1e34e20ca44ae4c51783faab41c5b2e Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Mon, 19 Oct 2026 10:43:03 +0200
+Subject: [PATCH] hexagonrpcd: support the OPLUS SSC OIS configuration file
+
+The OIS service of the SLPI on OPLUS SM8450/SM8475 phones (e.g. realme
+GT Neo5) reads /odm/etc/camera/self_ois.ocfg when the OIS sensor is
+started. Map /odm/etc/camera to <prefix>/camera/ and implement the two
+apps_std calls the DSP uses on that file after fopen: ftell (method 8)
+and flen (method 10). Without them hexagonrpcd exits on "Unsupported
+method" and is restarted.
+
+mapped_seek now returns the resulting offset so ftell can be built on
+top of hexagonfs_lseek; apps_std_fseek only treats negative values as
+errors.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ hexagonrpcd/apps_std.c              | 53 +++++++++++++++++++++++++++--
+ hexagonrpcd/hexagonfs_mapped.c      |  3 +-
+ hexagonrpcd/interfaces/apps_std.def |  2 ++
+ hexagonrpcd/rpcd_builder.c          | 18 ++++++++--
+ 4 files changed, 70 insertions(+), 6 deletions(-)
+
+diff --git a/hexagonrpcd/apps_std.c b/hexagonrpcd/apps_std.c
+index 06519f8..3bbdeba 100644
+--- a/hexagonrpcd/apps_std.c
++++ b/hexagonrpcd/apps_std.c
+@@ -136,7 +136,7 @@ static uint32_t apps_std_fseek(void *data,
+ 	whence = apps_std_whence_table[first_in->whence];
+ 
+ 	ret = hexagonfs_lseek(ctx->fds, first_in->fd, first_in->pos, whence);
+-	if (ret) {
++	if (ret < 0) {
+ 		fprintf(stderr, "Could not seek stream: %s\n", strerror(-ret));
+ 		return AEE_EFAILED;
+ 	}
+@@ -150,6 +150,47 @@ static uint32_t apps_std_fseek(void *data,
+ 	return 0;
+ }
+ 
++static uint32_t apps_std_ftell(void *data,
++			       const struct fastrpc_io_buffer *inbufs,
++			       struct fastrpc_io_buffer *outbufs)
++{
++	struct apps_std_ctx *ctx = data;
++	const uint32_t *fd = inbufs[0].p;
++	uint64_t *pos = outbufs[0].p;
++	int ret;
++
++	ret = hexagonfs_lseek(ctx->fds, *fd, 0, SEEK_CUR);
++	if (ret < 0) {
++		fprintf(stderr, "Could not tell stream: %s\n", strerror(-ret));
++		return AEE_EFAILED;
++	}
++
++	*pos = ret;
++
++	return 0;
++}
++
++static uint32_t apps_std_flen(void *data,
++			      const struct fastrpc_io_buffer *inbufs,
++			      struct fastrpc_io_buffer *outbufs)
++{
++	struct apps_std_ctx *ctx = data;
++	const uint32_t *fd = inbufs[0].p;
++	uint64_t *len = outbufs[0].p;
++	struct stat stats;
++	int ret;
++
++	ret = hexagonfs_fstat(ctx->fds, *fd, &stats);
++	if (ret) {
++		fprintf(stderr, "Could not stat stream: %s\n", strerror(-ret));
++		return AEE_EFAILED;
++	}
++
++	*len = stats.st_size;
++
++	return 0;
++}
++
+ static uint32_t apps_std_fopen_with_env(void *data,
+ 					const struct fastrpc_io_buffer *inbufs,
+ 					struct fastrpc_io_buffer *outbufs)
+@@ -422,12 +463,18 @@ static const struct fastrpc_function_impl apps_std_procs[] = {
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+-	{ .def = NULL, .impl = NULL, },
++	{
++		.def = &apps_std_ftell_def,
++		.impl = apps_std_ftell,
++	},
+ 	{
+ 		.def = &apps_std_fseek_def,
+ 		.impl = apps_std_fseek,
+ 	},
+-	{ .def = NULL, .impl = NULL, },
++	{
++		.def = &apps_std_flen_def,
++		.impl = apps_std_flen,
++	},
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+diff --git a/hexagonrpcd/hexagonfs_mapped.c b/hexagonrpcd/hexagonfs_mapped.c
+index fd28c8c..a9d8455 100644
+--- a/hexagonrpcd/hexagonfs_mapped.c
++++ b/hexagonrpcd/hexagonfs_mapped.c
+@@ -176,7 +176,8 @@ static int mapped_seek(struct hexagonfs_fd *fd, off_t off, int whence)
+ 	if (ret == -1)
+ 		return -errno;
+ 
+-	return 0;
++	/* Return the new offset so that ftell() can be built on top */
++	return ret;
+ }
+ 
+ static int mapped_stat(struct hexagonfs_fd *fd, struct stat *stats)
+diff --git a/hexagonrpcd/interfaces/apps_std.def b/hexagonrpcd/interfaces/apps_std.def
+index 2fbbdb1..68d7c21 100644
+--- a/hexagonrpcd/interfaces/apps_std.def
++++ b/hexagonrpcd/interfaces/apps_std.def
+@@ -28,7 +28,9 @@ HEXAGONRPC_DEFINE_REMOTE_METHOD(1, apps_std_freopen, 1, 0, 1, 1)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(2, apps_std_fflush, 8, 0, 0, 0)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(3, apps_std_fclose, 1, 0, 0, 0)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(4, apps_std_fread, 1, 0, 2, 1)
++HEXAGONRPC_DEFINE_REMOTE_METHOD(8, apps_std_ftell, 1, 0, 2, 0)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(9, apps_std_fseek, 3, 0, 0, 0)
++HEXAGONRPC_DEFINE_REMOTE_METHOD(10, apps_std_flen, 1, 0, 2, 0)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(19, apps_std_fopen_with_env, 0, 4, 1, 0)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(26, apps_std_opendir, 0, 1, 2, 0)
+ HEXAGONRPC_DEFINE_REMOTE_METHOD(27, apps_std_closedir, 2, 0, 0, 0)
+diff --git a/hexagonrpcd/rpcd_builder.c b/hexagonrpcd/rpcd_builder.c
+index d374958..8e40179 100644
+--- a/hexagonrpcd/rpcd_builder.c
++++ b/hexagonrpcd/rpcd_builder.c
+@@ -32,6 +32,7 @@
+ #define SENSORS_REGISTRY	"/sensors/registry/"
+ #define SNS_REG_CONFIG		"/sensors/sns_reg.conf"
+ #define SYSFS_SOCINFO		"/socinfo/"
++#define CAMERA_CONFIG		"/camera/"
+ 
+ static struct hexagonfs_dirent *hfs_mkdir(const char *name, size_t n_ents, ...)
+ {
+@@ -111,7 +112,8 @@ static struct hexagonfs_dirent *hfs_map_or_empty(const char *name, const char *p
+  */
+ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ {
+-	char *acdbdata, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config, *socinfo;
++	char *acdbdata, *camera_cfg, *dsp_libs, *sns_cfg, *sns_reg, *sns_reg_config,
++	     *socinfo;
+ 	size_t n_prefix;
+ 	struct hexagonfs_dirent *persist_dir, *vendor_dir;
+ 
+@@ -122,6 +124,7 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 	sns_reg = malloc(n_prefix + strlen(SENSORS_REGISTRY) + 1);
+ 	sns_reg_config = malloc(n_prefix + strlen(SNS_REG_CONFIG) + 1);
+ 	socinfo = malloc(n_prefix + strlen(SYSFS_SOCINFO) + 1);
++	camera_cfg = malloc(n_prefix + strlen(CAMERA_CONFIG) + 1);
+ 
+ 	dsp_libs = malloc(n_prefix + strlen(DSP_LIBS) + strlen(dsp) + 1);
+ 
+@@ -150,6 +153,11 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 		strcat(socinfo, SYSFS_SOCINFO);
+ 	}
+ 
++	if (camera_cfg != NULL) {
++		strcpy(camera_cfg, prefix);
++		strcat(camera_cfg, CAMERA_CONFIG);
++	}
++
+ 	if (dsp_libs != NULL) {
+ 		strcpy(dsp_libs, prefix);
+ 		strcat(dsp_libs, DSP_LIBS);
+@@ -182,13 +190,19 @@ struct hexagonfs_dirent *construct_root_dir(const char *prefix, const char *dsp)
+ 				)
+ 			);
+ 
+-	return hfs_mkdir("/", 6,
++	return hfs_mkdir("/", 7,
+ 			hfs_mkdir("mnt", 1,
+ 				hfs_mkdir("vendor", 1,
+ 					persist_dir
+ 				)
+ 			),
+ 			persist_dir,
++			/* OPLUS SSC OIS reads /odm/etc/camera/self_ois.ocfg */
++			hfs_mkdir("odm", 1,
++				hfs_mkdir("etc", 1,
++					hfs_map_or_empty("camera", camera_cfg)
++				)
++			),
+ 			hfs_mkdir("sys", 1,
+ 				hfs_mkdir("devices", 1,
+ 					hfs_map_or_empty("soc0", socinfo)
+-- 
+2.55.0
+
