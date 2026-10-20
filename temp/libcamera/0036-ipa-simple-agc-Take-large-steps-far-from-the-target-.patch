@@ -1,0 +1,52 @@
+From 47f582a0d875bca114bfc6bcbfe4752466303dda Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 15:56:17 +0200
+Subject: [PATCH 36/37] ipa: simple: agc: Take large steps far from the target
+ exposure
+
+Going from a room to daylight changes the exposure by a factor of a few
+hundred, and steps of 10% at most per update took tens of updates: with
+statistics on one frame in four the image stayed overexposed for many
+seconds, which looked as if the exposure did not adapt.
+
+Beyond an MSV error of 1.5, step the exposure or gain by up to half, or
+1.5 times, per update.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/ipa/simple/algorithms/agc.cpp | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index a13a755..d24235f 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -61,6 +61,15 @@ static constexpr float kExpProportionalGain = 0.04;
+  */
+ static constexpr float kExpMaxStep = 0.15;
+ 
++/*
++ * Far from the target, as when the camera turns from a room to a sunlit
++ * window (a factor of a few hundred in exposure), proportional 10% steps
++ * take tens of updates. Beyond kExpLargeError step by up to half, or 1.5x,
++ * per update instead.
++ */
++static constexpr float kExpLargeError = 1.5;
++static constexpr float kExpLargeStep = 0.5;
++
+ Agc::Agc()
+ {
+ }
+@@ -82,6 +91,9 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 	 */
+ 	float step = std::clamp(static_cast<float>(error) * kExpProportionalGain,
+ 				-kExpMaxStep, kExpMaxStep);
++	if (std::abs(error) > kExpLargeError)
++		step = std::clamp(static_cast<float>(error) / 2.5f * kExpLargeStep,
++				  -kExpLargeStep, kExpLargeStep);
+ 	float factor = 1.0f + step;
+ 
+ 	if (factor > 1.0f) {
+-- 
+2.55.0
+

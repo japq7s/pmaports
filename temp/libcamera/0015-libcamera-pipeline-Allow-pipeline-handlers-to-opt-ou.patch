@@ -1,7 +1,7 @@
 From 3da24329fee79219056bf91e304ad17c8c527268 Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Fri, 3 Apr 2026 15:58:42 +0200
-Subject: [PATCH 15/34] libcamera: pipeline: Allow pipeline-handlers to opt out
+Subject: [PATCH 15/37] libcamera: pipeline: Allow pipeline-handlers to opt out
  of locking the media devices
 
 On Qualcomm chips any CSI-phy can be connected to any CSI-decoder and

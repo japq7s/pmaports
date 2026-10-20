@@ -1,0 +1,45 @@
+From f48b5935302524be771a1ba4360bf0c583ef2142 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 15:56:17 +0200
+Subject: [PATCH 35/37] pipeline: camss: Run the sensor in its full mode with
+ the IFE
+
+The IFE pixel line scales and crops, so the sensor mode no longer needs
+to match the stream: the 4096x2304 mode used for 16:9 viewfinders is a
+crop of the array without the lens shading the pipe is calibrated for,
+and 4:3 streams lost the top and bottom of the field of view. The
+downstream camera stack also streams the full 4096x3072 mode for 16:9,
+read back from the IFE on Android.
+
+Always pick the full native sensor mode with the IFE; the line crops the
+centre to the requested aspect ratio.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss_csi.cpp | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_csi.cpp b/src/libcamera/pipeline/camss/camss_csi.cpp
+index 1ec6e24..fd5194a 100644
+--- a/src/libcamera/pipeline/camss/camss_csi.cpp
++++ b/src/libcamera/pipeline/camss/camss_csi.cpp
+@@ -147,11 +147,13 @@ V4L2SubdeviceFormat CamssCsiCamera::getSensorFormat(Size size,
+ 		size = resolution;
+ 
+ 	/*
+-	 * An inline ISP scales the sensor output as a whole: match the
+-	 * aspect ratio that is asked for, not the native one.
++	 * An inline ISP scales and crops the sensor output to the stream:
++	 * run the sensor in its full native mode, which keeps the whole field
++	 * of view for any aspect ratio and is the frame the lens shading of
++	 * the pixel pipe is calibrated for.
+ 	 */
+ 	if (isp_ && isp_->isInline()) {
+-		desiredRatio = static_cast<float>(size.width) / size.height;
++		size = resolution;
+ 		desiredArea = size.width * size.height;
+ 	}
+ 
+-- 
+2.55.0
+

@@ -1,7 +1,7 @@
 From 7416b453107551248a1decdf0e7ee51616e113f2 Mon Sep 17 00:00:00 2001
 From: Robert Mader <robert.mader@collabora.com>
 Date: Sat, 8 Aug 2026 13:42:36 +0200
-Subject: [PATCH 07/34] simple: Limit swISP output sizes
+Subject: [PATCH 07/37] simple: Limit swISP output sizes
 
 ~/.config/libcamera/configuration.yaml
 ---

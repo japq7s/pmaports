@@ -1,7 +1,7 @@
 From 4e31d063fca8bced09260a64a4f6c70bdb0e8a19 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Tue, 20 Oct 2026 15:42:05 +0200
-Subject: [PATCH 34/34] pipeline: camss: Fall back to the sensor controls when
+Subject: [PATCH 34/37] pipeline: camss: Fall back to the sensor controls when
  none are queued
 
 The camss pipeline handler has no frame start events, so DelayedControls

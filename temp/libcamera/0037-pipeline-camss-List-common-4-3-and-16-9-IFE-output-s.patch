@@ -1,0 +1,53 @@
+From 155a3ff38e2fffda633ca59361e7daed936e6867 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 15:56:38 +0200
+Subject: [PATCH 37/37] pipeline: camss: List common 4:3 and 16:9 IFE output
+ sizes
+
+The IFE stream offered one size range, which applications that show a
+resolution choice cannot enumerate. List the common 4:3 and 16:9 sizes
+the line can produce from the sensor mode; validate() still takes any
+size within its range.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../pipeline/camss/camss_isp_ife.cpp          | 22 +++++++++++++++++--
+ 1 file changed, 20 insertions(+), 2 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 8c8836b..cf936c2 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -275,9 +275,27 @@ StreamConfiguration CamssIspIfe::generateConfiguration(const StreamConfiguration
+ 		return {};
+ 	}
+ 
+-	/* The line downscales the sensor output */
++	/*
++	 * The line downscales and crops the sensor output to any size; list
++	 * the usual 4:3 and 16:9 ones for applications offering a choice.
++	 */
++	static const Size common[] = {
++		{ 4096, 3072 }, { 3264, 2448 }, { 2560, 1920 }, { 1920, 1440 },
++		{ 1600, 1200 }, { 1280, 960 }, { 640, 480 },
++		{ 3840, 2160 }, { 2560, 1440 }, { 1920, 1080 }, { 1280, 720 },
++	};
++	const Size min = minOutputSize(raw.size);
++	std::vector<SizeRange> sizes;
++	for (const Size &size : common) {
++		if (size.width <= raw.size.width && size.height <= raw.size.height &&
++		    size.width >= min.width && size.height >= min.height)
++			sizes.emplace_back(size);
++	}
++	if (sizes.empty())
++		sizes.emplace_back(outputSize(raw.size, raw.size));
++
+ 	std::map<PixelFormat, std::vector<SizeRange>> formats = {
+-		{ formats::NV12, { SizeRange(minOutputSize(raw.size), raw.size, kWidthAlign, 2) } },
++		{ formats::NV12, sizes },
+ 	};
+ 
+ 	StreamConfiguration cfg{ StreamFormats{ formats } };
+-- 
+2.55.0
+
