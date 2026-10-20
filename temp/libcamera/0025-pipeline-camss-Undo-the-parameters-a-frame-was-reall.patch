@@ -1,7 +1,7 @@
 From 567f3e0db76d860bfddb456abe33fea6e4930e4a Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 18:46:22 +0200
-Subject: [PATCH 25/29] pipeline: camss: Undo the parameters a frame was really
+Subject: [PATCH 25/31] pipeline: camss: Undo the parameters a frame was really
  processed with
 
 The statistics of a frame were computed with the parameters of its

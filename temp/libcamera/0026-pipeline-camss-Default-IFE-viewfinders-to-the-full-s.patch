@@ -1,7 +1,7 @@
 From 5b039c0196d0a021d3fc8be07d896e11699c9406 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 18:56:18 +0200
-Subject: [PATCH 26/29] pipeline: camss: Default IFE viewfinders to the full
+Subject: [PATCH 26/31] pipeline: camss: Default IFE viewfinders to the full
  sensor width
 
 The 1296x736 mode of the IMX890 is a centre crop of the array, so the

@@ -1,0 +1,42 @@
+From c7830c86a97f6f202128b3829b88dd88b76ec2ed Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 14:47:12 +0200
+Subject: [PATCH 30/31] pipeline: camss: Align IFE output widths to 64 pixels
+
+GTK applications import the NV12 buffers into Vulkan, and the Adreno
+driver (turnip) refuses linear planes whose pitch is not a multiple of
+64 bytes. The 1296x736 output of the IMX890 failed every import with
+VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT, and snapshot fell
+back to slower paths. Offer only output widths that are multiples of 64.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss_isp_ife.cpp | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 3fe867f..8cbb3fa 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -57,12 +57,14 @@ constexpr unsigned int kPixPadSink = 0;
+ constexpr unsigned int kPixPadSrc = 1;
+ 
+ /*
+- * The line's MN downscaler: the output width is written in multiples of 16
+- * pixels, and at most 8 times smaller than the sensor output, for the
+- * chroma scaler to stay within 16.
++ * The line's MN downscaler: at most 8 times smaller than the sensor output,
++ * for the chroma scaler to stay within 16. The output width is a multiple
++ * of 64 pixels: the write master needs 16, and the Adreno Vulkan driver
++ * refuses to import linear planes whose pitch is not a multiple of 64 bytes
++ * (VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT in GTK applications).
+  */
+ constexpr unsigned int kScaleMax = 8;
+-constexpr unsigned int kWidthAlign = 16;
++constexpr unsigned int kWidthAlign = 64;
+ 
+ Size minOutputSize(const Size &raw)
+ {
+-- 
+2.55.0
+

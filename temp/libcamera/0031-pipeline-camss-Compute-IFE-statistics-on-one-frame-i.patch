@@ -1,0 +1,93 @@
+From 5032431839ca43122c15ed8b63fd6eb9ea1bcec0 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 14:48:43 +0200
+Subject: [PATCH 31/31] pipeline: camss: Compute IFE statistics on one frame in
+ four
+
+The IFE statistics took about half a CPU core at 1920x1080 30 fps, all
+of it in the camera manager thread: every output buffer was mapped,
+synchronised and sampled. The soft IPA only needs statistics on one
+frame in four, which is all SwStatsCpu provides, and its algorithms
+ignore the others.
+
+Compute them on one frame in four, mark the others invalid, and map
+each output buffer once instead of per frame.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../pipeline/camss/camss_isp_ife.cpp          | 26 ++++++++++++++-----
+ src/libcamera/pipeline/camss/camss_isp_ife.h  |  2 ++
+ 2 files changed, 21 insertions(+), 7 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 8cbb3fa..a019421 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -103,6 +103,9 @@ void scalerRects(const Size &raw, const Size &out, Rectangle *compose, Rectangle
+ 			  ((scaled.height - out.height) / 2) & ~1u, out);
+ }
+ 
++/* Statistics for one frame in kStatsPeriod, as SwStatsCpu */
++constexpr unsigned int kStatsPeriod = 4;
++
+ /* Statistics sample every kStatsStep pixels of the central 2/3 of the frame */
+ constexpr unsigned int kStatsStep = 4;
+ 
+@@ -422,6 +425,7 @@ void CamssIspIfe::freeBuffers()
+ 	pendingParams_ = {};
+ 	frameInfos_->clear();
+ 	mappedParams_.clear();
++	mappedOutputs_.clear();
+ 	applied_.clear();
+ 	effective_.clear();
+ 	paramBuffers_.clear();
+@@ -708,18 +712,26 @@ void CamssIspIfe::outputReady(FrameBuffer *buffer)
+ 	if (eff != effective_.begin())
+ 		applied = &std::prev(eff)->second;
+ 
+-	if (applied) {
++	/*
++	 * Statistics for one frame in kStatsPeriod, as SwStatsCpu does: the
++	 * IPA algorithms only act on valid ones.
++	 */
++	if (applied && !(info->id % kStatsPeriod)) {
++		auto it = mappedOutputs_.find(buffer);
++		if (it == mappedOutputs_.end())
++			it = mappedOutputs_.emplace(buffer,
++						    MappedFrameBuffer(buffer,
++								      MappedFrameBuffer::MapFlag::Read)).first;
++
+ 		DmaSyncer sync(buffer->planes()[0].fd, DmaSyncer::SyncType::Read);
+-		MappedFrameBuffer mapped(buffer, MappedFrameBuffer::MapFlag::Read);
+ 
+-		if (mapped.isValid())
+-			computeStats(mapped, *applied);
++		if (it->second.isValid())
++			computeStats(it->second, *applied);
+ 		else
+ 			LOG(Camss, Error) << "Failed to map the IFE output";
+-	}
+-
+-	if (!applied)
++	} else {
+ 		sharedStats_->valid = false;
++	}
+ 
+ 	statsReady.emit(info->id, 0);
+ 	outputBufferReady.emit(buffer);
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.h b/src/libcamera/pipeline/camss/camss_isp_ife.h
+index 899d000..6804532 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.h
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.h
+@@ -112,6 +112,8 @@ private:
+ 
+ 	std::vector<std::unique_ptr<FrameBuffer>> paramBuffers_;
+ 	std::map<FrameBuffer *, MappedFrameBuffer> mappedParams_;
++	/* Output buffers mapped once, for the statistics */
++	std::map<FrameBuffer *, MappedFrameBuffer> mappedOutputs_;
+ 	std::map<uint32_t, Applied> applied_;
+ 	/* Parameters by the sequence of the first frame they apply to */
+ 	std::map<uint32_t, Applied> effective_;
+-- 
+2.55.0
+
