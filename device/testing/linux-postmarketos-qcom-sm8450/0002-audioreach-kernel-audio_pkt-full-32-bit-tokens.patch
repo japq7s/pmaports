@@ -1,0 +1,103 @@
+From b0fd3ec377fcf303fd5bc1bef0b102d3e72dfe3f Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 22:45:32 +0200
+Subject: [PATCH] audio_pkt: track pending commands by the full 32-bit token
+
+audio_pkt_write() remembers the client port of every command under its
+GPR token, with idr_alloc(token, token + 1). The idr only takes ids up
+to INT_MAX, but the tokens use all 32 bits: GSL puts a packet counter in
+bits 31:12, so after 2^19 packets every token has bit 31 set, idr_alloc()
+warns ("WARNING: lib/idr.c:86") and fails with -EINVAL, and from then on
+no command reaches the DSP. With a PipeWire stream open that happens
+after about 70 minutes of audio, and playback and capture stop for good.
+
+Keep the map in an xarray, which takes the whole u32 range. Also drop the
+entry again when the packet cannot be sent: no response will remove it,
+and the stale entry would make a later command with the same token fail.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ audioreach-driver/q6apm_audio_pkt.c | 23 +++++++++++++----------
+ 1 file changed, 13 insertions(+), 10 deletions(-)
+
+diff --git a/audioreach-driver/q6apm_audio_pkt.c b/audioreach-driver/q6apm_audio_pkt.c
+index 2fc1718..f3e072f 100644
+--- a/audioreach-driver/q6apm_audio_pkt.c
++++ b/audioreach-driver/q6apm_audio_pkt.c
+@@ -16,7 +16,7 @@
+ #include <linux/device.h>
+ #include <linux/skbuff.h>
+ #include <linux/cdev.h>
+-#include <linux/idr.h>
++#include <linux/xarray.h>
+ #include <linux/fs.h>
+ #include <linux/uaccess.h>
+ #include <linux/termios.h>
+@@ -83,7 +83,8 @@ struct q6apm_audio_pkt {
+ 	struct class *audio_pkt_class;
+ 
+ 	struct mutex audpkt_port_lock;
+-	struct idr audpkt_port_idr;
++	/* pending commands by GPR token (u32: tokens use all 32 bits) */
++	struct xarray audpkt_port_xa;
+ };
+ 
+ struct audio_pkt_apm_cmd_shared_mem_map_regions_t {
+@@ -518,15 +519,13 @@ static ssize_t audio_pkt_write(struct file *file, const char __user *buf,
+ 	audpkt_port_map->dst_port = audpkt_hdr->dest_port;
+ 
+ 	mutex_lock(&audpkt_dev->audpkt_port_lock);
+-	ret = idr_alloc(&audpkt_dev->audpkt_port_idr, audpkt_port_map,
+-			audpkt_hdr->token,
+-			audpkt_hdr->token + 1,
+-			GFP_KERNEL);
++	ret = xa_insert(&audpkt_dev->audpkt_port_xa, audpkt_hdr->token,
++			audpkt_port_map, GFP_KERNEL);
+ 	mutex_unlock(&audpkt_dev->audpkt_port_lock);
+ 
+ 	if (ret < 0) {
+ 		kfree(audpkt_port_map);
+-		AUDIO_PKT_ERR("idr_alloc failed for token=%u\n", audpkt_hdr->token);
++		AUDIO_PKT_ERR("token=%u not tracked: %d\n", audpkt_hdr->token, ret);
+ 		goto free_kbuf;
+ 	} else {
+ 		audpkt_hdr->src_port = GPR_APM_MODULE_IID;
+@@ -540,6 +539,11 @@ static ssize_t audio_pkt_write(struct file *file, const char __user *buf,
+ 	if (ret < 0) {
+ 		AUDIO_PKT_ERR("APR Send Packet Failed ret -%d\n", ret);
+ 		mutex_unlock(&audpkt_dev->lock);
++		/* no response will come for it */
++		mutex_lock(&audpkt_dev->audpkt_port_lock);
++		kfree(xa_erase(&audpkt_dev->audpkt_port_xa,
++			       ((struct gpr_hdr *)kbuf)->token));
++		mutex_unlock(&audpkt_dev->audpkt_port_lock);
+ 		kfree(kbuf);
+ 		return ret;
+ 	}
+@@ -670,7 +674,7 @@ static int q6apm_audio_pkt_probe(gpr_device_t *adev)
+ 	init_waitqueue_head(&apm->readq);
+ 
+ 	mutex_init(&apm->audpkt_port_lock);
+-	idr_init(&apm->audpkt_port_idr);
++	xa_init(&apm->audpkt_port_xa);
+ 
+ 	g_apm = apm;
+ 
+@@ -730,13 +734,12 @@ static int q6apm_audio_pkt_callback_core(const struct gpr_resp_pkt *data, void *
+ 	pkt_size = hdr->pkt_size;
+ 
+ 	mutex_lock(&apm->audpkt_port_lock);
+-	audpkt_port_map = idr_find(&apm->audpkt_port_idr, hdr->token);
++	audpkt_port_map = xa_erase(&apm->audpkt_port_xa, hdr->token);
+ 	if (audpkt_port_map) {
+ 		new_dest_port = audpkt_port_map->src_port;
+ 		new_src_port  = audpkt_port_map->dst_port;
+ 		remap_ports = true;
+ 
+-		idr_remove(&apm->audpkt_port_idr, hdr->token);
+ 		kfree(audpkt_port_map);
+ 	} else {
+ 		dev_dbg(dev, "Token=%u not found\n", hdr->token);
+-- 
+2.55.0
+

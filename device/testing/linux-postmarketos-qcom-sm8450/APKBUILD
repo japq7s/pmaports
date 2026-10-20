@@ -7,7 +7,7 @@
 _flavor="postmarketos-qcom-sm8450"
 pkgname=linux-$_flavor
 pkgver=7.3.0
-pkgrel=0
+pkgrel=1
 pkgdesc="Mainline kernel fork for SM8450/SM8475 devices"
 arch="aarch64"
 _carch="arm64"
@@ -35,6 +35,7 @@ source="
 	config-$_flavor.$arch
 	audioreach-kernel-$_ar_commit.tar.gz::https://github.com/Audioreach/audioreach-kernel/archive/$_ar_commit.tar.gz
 	0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
+	0002-audioreach-kernel-audio_pkt-full-32-bit-tokens.patch
 	oplus-chg-$_oc_commit.tar.gz::https://github.com/japq7s/oplus-chg-mainline/archive/$_oc_commit.tar.gz
 "
 builddir="$srcdir/linux-sm8450-mainline-$_commit"
@@ -42,9 +43,10 @@ _ardir="$srcdir/audioreach-kernel-$_ar_commit"
 _ocdir="$srcdir/oplus-chg-mainline-$_oc_commit"
 
 prepare() {
-	# the only patch is for audioreach-kernel, not for the kernel tree
+	# the patches are for audioreach-kernel, not for the kernel tree
 	cd "$_ardir"
 	patch -p1 -i "$srcdir"/0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
+	patch -p1 -i "$srcdir"/0002-audioreach-kernel-audio_pkt-full-32-bit-tokens.patch
 
 	cd "$builddir"
 	cp "$srcdir/config-$_flavor.$arch" .config
@@ -91,5 +93,6 @@ sha512sums="
 7f41e28d445c16ba9f7347dab19016a4a336854c5891ec1d74e29157b4cf18e0f6720fd16cdaaaa082240a2305b49a693efc66ed5b416687ead7d6772c21d1a7  config-postmarketos-qcom-sm8450.aarch64
 b777a0249a4b030abd6c9a11807a24cf6bd20d1bc22ba006cbdc8e87fedbaec241d9028af4606833587784a132ca3d49d057be678519b1f2a6da3900e2850631  audioreach-kernel-07e619c32b8a63a9a0ea7cf23438b3d5f62f0baf.tar.gz
 144a7b6891d25a64c0a1b804a0f987ce52b9691220e5af2c03869231b28cb928ba8a061db726cb80b7382ac86b4a6d445f49dc773edb762fa77594610df7db19  0001-audioreach-kernel-sm8450-drop-WSA-speaker-and-jack-defaults.patch
+0786f24539b8ac8cdf83537edc2d2422e5fb7e7b67504aabb2eba17534daba1c37289d3ca372c4fd54c6420e1a02709c0bd6c092bad98ccc645840b181062289  0002-audioreach-kernel-audio_pkt-full-32-bit-tokens.patch
 83936ad86bd7dc24e1360dc791f8e49151f1fbb10500c0817740806c512b4c0a18f29fd11cd248218fbe338aa43c027d32603e6971d4276594306a2252006532  oplus-chg-ceb21e7eb42b40786eed69f99118ed93bd918058.tar.gz
 "
