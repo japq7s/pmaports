@@ -1,0 +1,51 @@
+From ae071913f3446c3e567188649180f4231606e6a9 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 21:01:35 +0200
+Subject: [PATCH] gsl: hand out each packet token once
+
+gsl_send_spf_cmd() builds the token of every command from a static
+counter (bits 31:12) and the buffer index (bits 11:0). It is called from
+several threads, e.g. the writer of a playback data path and the reader
+of a capture data path, and the plain ++ on the counter lets two of them
+take the same value. With the same buffer index both packets then carry
+the same token, which the audio_pkt kernel driver rejects (-ENOSPC: the
+token is still waiting for its response), and the data path stops for
+good: "gpr_dl_lx_send ... write to driver failed 28" followed by failing
+reads and writes on every buffer.
+
+Take the counter with an atomic fetch-and-add.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ gsl/src/gsl_common.c | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/gsl/src/gsl_common.c b/gsl/src/gsl_common.c
+index 6dc8ed5..57566ac 100644
+--- a/gsl/src/gsl_common.c
++++ b/gsl/src/gsl_common.c
+@@ -175,10 +175,17 @@ int32_t gsl_send_spf_cmd(gpr_packet_t **packet, struct gsl_signal *sig_p,
+ 		dst_port = (*packet)->dst_port;
+ 	#endif
+ 	if(opcode != APM_CMD_REGISTER_MODULE_EVENTS) {
+-		if ((debug_token << DEBUG_TOKEN_SHIFT) == 0)
+-			++debug_token;
+-		INSERT_DEBUG_TOKEN((*packet)->token, debug_token);
+-		++debug_token;
++		uint32_t token;
++
++		/*
++		 * Commands are sent from several threads (e.g. a playback and a
++		 * capture data path): a plain ++ hands out the same value twice,
++		 * and with the same buffer index the packets then share a token.
++		 */
++		do {
++			token = __atomic_fetch_add(&debug_token, 1, __ATOMIC_RELAXED);
++		} while ((token << DEBUG_TOKEN_SHIFT) == 0);
++		INSERT_DEBUG_TOKEN((*packet)->token, token);
+         	if(sig_p == NULL)
+ 			GSL_VERBOSE("sending pkt opcode 0x%x token 0x%08x", opcode, (*packet)->token);
+ 	}
+-- 
+2.55.0
+

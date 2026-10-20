@@ -1,7 +1,7 @@
 # Maintainer: japq7s <japiotr123@proton.me>
 pkgname=audioreach-graphservices
 pkgver=1.0.1_git20261005
-pkgrel=1
+pkgrel=2
 _commit="3094583c726710b66eb0204fc5d6a7b336d9e575"
 pkgdesc="AudioReach graph services: GSL, ACDB manager, GPR, ATS"
 url="https://github.com/AudioReach/audioreach-graphservices"
@@ -14,6 +14,7 @@ source="
 	$pkgname-$_commit.tar.gz::https://github.com/AudioReach/audioreach-graphservices/archive/$_commit.tar.gz
 	musl-compat.h
 	0001-shmem-phy-fall-back-to-mainline-dma-heaps.patch
+	0002-gsl-hand-out-each-packet-token-once.patch
 	msm_audio.h
 "
 builddir="$srcdir/audioreach-graphservices-$_commit"
@@ -53,5 +54,6 @@ sha512sums="
 9ba44afd4ff1cde50356f7a353f953d41cb6032ef24a9dc97b248adbe76171f37bd03fb30e39f01fc0a63846a405cdfc69184d285911d7e3f8889ea8f99e30a9  audioreach-graphservices-3094583c726710b66eb0204fc5d6a7b336d9e575.tar.gz
 a85c655c09e0e6b4ae17763a74762d27dfd88194b767d1d73743618050afa827ea487a52a65a00138b2ce76c80057de5b25b5930afe13d6b78761c258d374c8e  musl-compat.h
 86c7731db9333cabb294c0df478338ebff1e6485077f17ca1623e42face733be50734ea1c54a8f4418293424878e5fa75f0830b654d7afeebcb5c8a4d9ec45ee  0001-shmem-phy-fall-back-to-mainline-dma-heaps.patch
+8516eba591b62c47b962be42320f127c74250f5191bb1bf0b8606d96f72fe234f1e5fce0f8219aeb733643ee350813a1908381dbdf19472f99bc39fe0240109f  0002-gsl-hand-out-each-packet-token-once.patch
 3d52cb9f004238643e7889791bec8c8a9f1b235e9c14a401d93c2363e113063d14ab8a47add03e6d83526368e13c3b543f4d55dda704baf204e9a2fc0cb46bca  msm_audio.h
 "
