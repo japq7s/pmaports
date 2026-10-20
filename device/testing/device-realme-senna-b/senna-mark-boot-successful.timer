@@ -4,7 +4,9 @@ Description=Mark the booted A/B slot successful once the system has been up for 
 [Timer]
 # Like Android after boot completed: a kernel that resets or hangs early
 # keeps the retry count going down, so the bootloader can still fall back.
-OnBootSec=2min
+# Not much later than a full boot: every reboot before the timer fires costs
+# a retry, and a few quick reboots in a row would switch the slot.
+OnBootSec=1min
 AccuracySec=10s
 
 [Install]
