@@ -1,7 +1,7 @@
-From 8a7fb4b96dc7b9357cf50cf01a5fe3019e5511d5 Mon Sep 17 00:00:00 2001
+From 27b40d50147615b842d435d583ae53ee674ee70e Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 19:45:19 +0200
-Subject: [PATCH 28/28] pipeline: camss: Downscale with the IFE pixel line
+Subject: [PATCH 28/29] pipeline: camss: Downscale with the IFE pixel line
 
 The kernel now programs the downscaler of the VFE pixel line from the
 compose rectangle of its sink pad and the crop of its source pad. Offer

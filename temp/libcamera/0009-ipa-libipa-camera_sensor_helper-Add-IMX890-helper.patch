@@ -1,7 +1,7 @@
-From d0bf200568e31300f0b15a25c00c7fa09c275a91 Mon Sep 17 00:00:00 2001
+From 0b361da542faa46c9531ef1fb9ab09d33263bd50 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Thu, 15 Oct 2026 15:03:25 +0200
-Subject: [PATCH 09/28] ipa: libipa: camera_sensor_helper: Add IMX890 helper
+Subject: [PATCH 09/29] ipa: libipa: camera_sensor_helper: Add IMX890 helper
 
 Add a camera sensor helper for the Sony IMX890. The driver exposes the
 analogue gain linearly in 1/256 steps, and the black level of 64 at 10 bits

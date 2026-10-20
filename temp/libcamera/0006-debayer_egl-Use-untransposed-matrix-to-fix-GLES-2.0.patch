@@ -1,7 +1,7 @@
-From 296e95f62734aae98ee8a803e79ed604be9e0b11 Mon Sep 17 00:00:00 2001
+From 949aa1979efb63880455e0fe12dd1136cae70f39 Mon Sep 17 00:00:00 2001
 From: Robert Mader <robert.mader@collabora.com>
 Date: Sat, 29 Aug 2026 01:38:26 +0200
-Subject: [PATCH 06/28] debayer_egl: Use untransposed matrix to fix GLES 2.0
+Subject: [PATCH 06/29] debayer_egl: Use untransposed matrix to fix GLES 2.0
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit

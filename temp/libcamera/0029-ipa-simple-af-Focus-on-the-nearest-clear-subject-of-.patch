@@ -1,0 +1,406 @@
+From e8078f94166e486931ac7bbfc3874a96841a03bb Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 14:39:54 +0200
+Subject: [PATCH 29/29] ipa: simple: af: Focus on the nearest clear subject of
+ a 3x3 zone grid
+
+The focus measure only covered the centre third of the frame, so a
+subject off centre, or a centre showing the background, made the lens
+focus on the wrong distance.
+
+Add per-zone focus measures to the statistics, a 3x3 grid over the
+centre 80% of the frame, filled by the CAMSS IFE statistics. When they
+are present the coarse scan covers the whole range and records every
+zone, then focuses on the zone with the nearest clear peak among those
+standing out at least half as much as the strongest one, the centre
+counting 1.5 times, and fine scans that zone only. Without zones the
+algorithm is unchanged.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../internal/software_isp/swisp_stats.h       |  20 ++
+ src/ipa/simple/algorithms/af.cpp              | 178 ++++++++++++++++--
+ src/ipa/simple/algorithms/af.h                |  17 ++
+ .../pipeline/camss/camss_isp_ife.cpp          |  48 +++--
+ src/libcamera/software_isp/swstats_cpu.cpp    |   1 +
+ 5 files changed, 228 insertions(+), 36 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index 35232a6..187b546 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -56,6 +56,26 @@ struct SwIspStats {
+ 	 * \brief Number of luminance samples in the focus window
+ 	 */
+ 	uint32_t focusCount;
++	/**
++	 * \brief Number of focus zones, a grid over the centre of the frame
++	 */
++	static constexpr unsigned int kFocusZonesX = 3;
++	static constexpr unsigned int kFocusZonesY = 3;
++	static constexpr unsigned int kFocusZones = kFocusZonesX * kFocusZonesY;
++	/**
++	 * \brief The focus measure of one zone, as focusSquares, focusSum and
++	 * focusCount for the focus window
++	 */
++	struct FocusZone {
++		uint64_t squares;
++		uint64_t sum;
++		uint32_t count;
++	};
++	/**
++	 * \brief The focus zones in raster order, all counts zero when the
++	 * statistics have none
++	 */
++	std::array<FocusZone, kFocusZones> focusZones;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index 47fd61d..0833901 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -35,6 +35,13 @@ namespace ipa::soft::algorithms {
+  * measure has clearly passed its peak, then scans around the best coarse
+  * position in fine steps and settles on the interpolated peak.
+  *
++ * When the statistics carry focus zones, the coarse scan covers the whole
++ * range and records every zone. The zone to focus on is the one with the
++ * nearest clear peak among those whose peak stands out at least half as much
++ * as the strongest one, the centre zone counting one and a half times: the
++ * nearest subject that is not just a little texture, rather than whatever
++ * lies in the centre. The fine scan then measures that zone only.
++ *
+  * In continuous mode the first scan waits until the scene, and the exposure
+  * with it, is stable. The lens is left alone once focused. A new scan only
+  * starts when the scene has changed (focus measure or brightness away from
+@@ -59,6 +66,10 @@ static constexpr double kStableContrast = 0.1;
+ static constexpr double kStableMean = 0.05;
+ static constexpr unsigned int kStableCount = 3;
+ 
++/* Zone selection: weight of the centre zone, share of the strongest peak. */
++static constexpr double kCentreWeight = 1.5;
++static constexpr double kZoneShare = 0.5;
++
+ int Af::init(IPAContext &context, const ValueNode &tuningData)
+ {
+ 	infinity_ = tuningData["infinity"].get<int32_t>(-1);
+@@ -205,6 +216,9 @@ void Af::startScan(IPAContext &context)
+ 	changePending_ = false;
+ 	changed_ = 0;
+ 	stable_ = 0;
++	coarsePositions_.clear();
++	coarseMeasures_.clear();
++	zone_ = SwIspStats::kFocusZones / 2;
+ 	state_ = State::CoarseScan;
+ 
+ 	moveTo(context, far_);
+@@ -250,28 +264,133 @@ void Af::scanStep(IPAContext &context, double contrast)
+ 			return;
+ 		}
+ 
+-		/* Scan around the best coarse position in fine steps. */
+-		const int32_t coarse = step_;
+-		step_ = coarse / static_cast<int32_t>(fineSteps_);
+-		if (!step_)
+-			step_ = coarse > 0 ? 1 : -1;
+-		const int32_t lo = std::min(far_, near_);
+-		const int32_t hi = std::max(far_, near_);
+-		scanEnd_ = std::clamp(bestPosition_ + coarse, lo, hi);
+-		const int32_t start = std::clamp(bestPosition_ - coarse, lo, hi);
+-
+-		bestContrast_ = 0.0;
+-		lastSample_ = 0.0;
+-		falling_ = 0;
+-		state_ = State::FineScan;
+-		moveTo(context, start);
+-		skip_ = std::max(skip_, 1u);
++		startFineScan(context);
+ 		return;
+ 	}
+ 
+ 	finishScan(context);
+ }
+ 
++/* Scan around the best coarse position in fine steps. */
++void Af::startFineScan(IPAContext &context)
++{
++	const int32_t coarse = step_;
++	step_ = coarse / static_cast<int32_t>(fineSteps_);
++	if (!step_)
++		step_ = coarse > 0 ? 1 : -1;
++	const int32_t lo = std::min(far_, near_);
++	const int32_t hi = std::max(far_, near_);
++	scanEnd_ = std::clamp(bestPosition_ + coarse, lo, hi);
++	const int32_t start = std::clamp(bestPosition_ - coarse, lo, hi);
++
++	bestContrast_ = 0.0;
++	lastSample_ = 0.0;
++	falling_ = 0;
++	state_ = State::FineScan;
++	moveTo(context, start);
++	skip_ = std::max(skip_, 1u);
++}
++
++bool Af::zoneMeasures(const SwIspStats *stats, ZoneMeasures *measures)
++{
++	for (unsigned int z = 0; z < SwIspStats::kFocusZones; z++) {
++		const SwIspStats::FocusZone &zone = stats->focusZones[z];
++
++		if (!zone.count)
++			return false;
++
++		const double mean = static_cast<double>(zone.sum) / zone.count;
++		(*measures)[z] = static_cast<double>(zone.squares) / zone.count /
++				 (mean * mean + 1.0);
++	}
++
++	return true;
++}
++
++/* Returns kFocusZones when no zone has a clear peak */
++unsigned int Af::pickZone() const
++{
++	const unsigned int n = coarseMeasures_.size();
++	std::array<double, SwIspStats::kFocusZones> score{};
++	std::array<unsigned int, SwIspStats::kFocusZones> peak{};
++	double best = 0.0;
++
++	for (unsigned int z = 0; z < SwIspStats::kFocusZones; z++) {
++		double hi = 0.0, lo = 0.0;
++
++		for (unsigned int i = 0; i < n; i++) {
++			const double v = coarseMeasures_[i][z];
++
++			if (v > hi) {
++				hi = v;
++				peak[z] = i;
++			}
++			if (i == 0 || v < lo)
++				lo = v;
++		}
++
++		if (lo <= 0.0 || hi < lo * kFlatRatio)
++			continue;
++
++		score[z] = std::log(hi / lo);
++		if (z == SwIspStats::kFocusZones / 2)
++			score[z] *= kCentreWeight;
++		best = std::max(best, score[z]);
++	}
++
++	unsigned int chosen = SwIspStats::kFocusZones;
++	for (unsigned int z = 0; z < SwIspStats::kFocusZones; z++) {
++		if (best <= 0.0 || score[z] < best * kZoneShare)
++			continue;
++
++		/* The scan runs from infinity to macro: later is nearer. */
++		if (chosen == SwIspStats::kFocusZones || peak[z] > peak[chosen] ||
++		    (peak[z] == peak[chosen] && score[z] > score[chosen]))
++			chosen = z;
++	}
++
++	return chosen;
++}
++
++/* The coarse scan over the whole range, every zone recorded */
++void Af::coarseZoneStep(IPAContext &context, const ZoneMeasures &measures)
++{
++	coarsePositions_.push_back(position_);
++	coarseMeasures_.push_back(measures);
++
++	const bool atEnd = (step_ > 0 && position_ + step_ > scanEnd_) ||
++			   (step_ < 0 && position_ + step_ < scanEnd_);
++	if (!atEnd) {
++		moveTo(context, position_ + step_);
++		return;
++	}
++
++	zone_ = pickZone();
++	if (zone_ == SwIspStats::kFocusZones) {
++		LOG(IPASoftAf, Debug) << "Scan found no peak in any zone";
++		zone_ = SwIspStats::kFocusZones / 2;
++		state_ = State::Failed;
++		moveTo(context, far_);
++		needReference_ = true;
++		skip_ = std::max(skip_, 1u);
++		return;
++	}
++
++	const unsigned int n = coarseMeasures_.size();
++	unsigned int i = 0;
++	for (unsigned int j = 1; j < n; j++)
++		if (coarseMeasures_[j][zone_] > coarseMeasures_[i][zone_])
++			i = j;
++
++	bestPosition_ = coarsePositions_[i];
++	bestContrast_ = coarseMeasures_[i][zone_];
++
++	LOG(IPASoftAf, Debug)
++		<< "Focus zone " << zone_ << ", coarse peak at " << bestPosition_;
++
++	startFineScan(context);
++}
++
+ void Af::finishScan(IPAContext &context)
+ {
+ 	int32_t position = bestPosition_;
+@@ -380,14 +499,33 @@ void Af::process(IPAContext &context,
+ 		return;
+ 	}
+ 
+-	const double mean = static_cast<double>(stats->focusSum) / stats->focusCount;
+-	const double contrast = static_cast<double>(stats->focusSquares) /
+-				stats->focusCount / (mean * mean + 1.0);
++	double mean = static_cast<double>(stats->focusSum) / stats->focusCount;
++	double contrast = static_cast<double>(stats->focusSquares) /
++			  stats->focusCount / (mean * mean + 1.0);
++
++	ZoneMeasures zones;
++	useZones_ = zoneMeasures(stats, &zones);
++	if (useZones_) {
++		/* Scene changes anywhere in the grid restart the focus. */
++		uint64_t squares = 0, sum = 0, count = 0;
++		for (const SwIspStats::FocusZone &zone : stats->focusZones) {
++			squares += zone.squares;
++			sum += zone.sum;
++			count += zone.count;
++		}
++		mean = static_cast<double>(sum) / count;
++		contrast = static_cast<double>(squares) / count / (mean * mean + 1.0);
++	}
+ 
+ 	switch (state_) {
+ 	case State::CoarseScan:
++		if (useZones_)
++			coarseZoneStep(context, zones);
++		else
++			scanStep(context, contrast);
++		break;
+ 	case State::FineScan:
+-		scanStep(context, contrast);
++		scanStep(context, useZones_ ? zones[zone_] : contrast);
+ 		break;
+ 	case State::Waiting:
+ 	case State::Focused:
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+index 3d63146..1ed66b9 100644
+--- a/src/ipa/simple/algorithms/af.h
++++ b/src/ipa/simple/algorithms/af.h
+@@ -5,7 +5,11 @@
+ 
+ #pragma once
+ 
++#include <array>
+ #include <stdint.h>
++#include <vector>
++
++#include "libcamera/internal/software_isp/swisp_stats.h"
+ 
+ #include "algorithm.h"
+ 
+@@ -66,6 +70,13 @@ private:
+ 	State state_ = State::Idle;
+ 	int32_t position_ = 0;
+ 
++	using ZoneMeasures = std::array<double, SwIspStats::kFocusZones>;
++
++	static bool zoneMeasures(const SwIspStats *stats, ZoneMeasures *measures);
++	unsigned int pickZone() const;
++	void coarseZoneStep(IPAContext &context, const ZoneMeasures &measures);
++	void startFineScan(IPAContext &context);
++
+ 	/* Scan */
+ 	int32_t step_ = 0;
+ 	int32_t scanEnd_ = 0;
+@@ -78,6 +89,12 @@ private:
+ 	unsigned int falling_ = 0;
+ 	unsigned int skip_ = 0;
+ 
++	/* Zones: the coarse scan of every zone, and the zone being focused */
++	std::vector<int32_t> coarsePositions_;
++	std::vector<ZoneMeasures> coarseMeasures_;
++	bool useZones_ = false;
++	unsigned int zone_ = SwIspStats::kFocusZones / 2;
++
+ 	/* Scene change detection */
+ 	bool needReference_ = false;
+ 	double refContrast_ = 0.0;
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 608aebf..3fe867f 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -642,26 +642,42 @@ void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &ap
+ 
+ 	/*
+ 	 * Focus measure as SwStatsCpu computes it, squared differences of
+-	 * horizontally adjacent luminance samples, here on the full resolution
+-	 * luma of the centre third of the frame.
++	 * horizontally adjacent luminance samples, on the full resolution luma
++	 * of a 3x3 grid over the centre 80% of the frame. The focus window
++	 * proper is the centre zone.
+ 	 */
+-	const unsigned int fx0 = size_.width / 3, fx1 = size_.width * 2 / 3;
+-	const unsigned int fy0 = size_.height / 3, fy1 = size_.height * 2 / 3;
+-	for (unsigned int row = fy0; row < fy1; row += kStatsStep) {
+-		const uint8_t *yl = &y[row * stride];
+-		int64_t prev = -1;
+-
+-		for (unsigned int col = fx0; col < fx1; col += 2) {
+-			int64_t cur = yl[col];
+-
+-			if (prev >= 0)
+-				stats.focusSquares += (cur - prev) * (cur - prev);
+-			stats.focusSum += cur;
+-			stats.focusCount++;
+-			prev = cur;
++	constexpr unsigned int zx = SwIspStats::kFocusZonesX;
++	constexpr unsigned int zy = SwIspStats::kFocusZonesY;
++	const unsigned int gx0 = size_.width / 10, gw = size_.width * 8 / 10;
++	const unsigned int gy0 = size_.height / 10, gh = size_.height * 8 / 10;
++	for (unsigned int r = 0; r < zy; r++) {
++		for (unsigned int c = 0; c < zx; c++) {
++			SwIspStats::FocusZone &zone = stats.focusZones[r * zx + c];
++			const unsigned int fx0 = gx0 + gw * c / zx, fx1 = gx0 + gw * (c + 1) / zx;
++			const unsigned int fy0 = gy0 + gh * r / zy, fy1 = gy0 + gh * (r + 1) / zy;
++
++			for (unsigned int row = fy0; row < fy1; row += kStatsStep) {
++				const uint8_t *yl = &y[row * stride];
++				int64_t prev = -1;
++
++				for (unsigned int col = fx0 & ~1u; col < fx1; col += 2) {
++					int64_t cur = yl[col];
++
++					if (prev >= 0)
++						zone.squares += (cur - prev) * (cur - prev);
++					zone.sum += cur;
++					zone.count++;
++					prev = cur;
++				}
++			}
+ 		}
+ 	}
+ 
++	const SwIspStats::FocusZone &centre = stats.focusZones[SwIspStats::kFocusZones / 2];
++	stats.focusSquares = centre.squares;
++	stats.focusSum = centre.sum;
++	stats.focusCount = centre.count;
++
+ 	stats.valid = true;
+ 	*sharedStats_ = stats;
+ }
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index d75a592..e79196e 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -473,6 +473,7 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 		sharedStats_->focusSquares = 0;
+ 		sharedStats_->focusSum = 0;
+ 		sharedStats_->focusCount = 0;
++		sharedStats_->focusZones = {};
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
+ 			sharedStats_->focusSquares += s.focusSquares;
+-- 
+2.55.0
+

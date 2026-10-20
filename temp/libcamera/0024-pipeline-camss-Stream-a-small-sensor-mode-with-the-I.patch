@@ -1,7 +1,7 @@
-From 5a4abaefe539151334ae8be0bc40692ac2d0c34b Mon Sep 17 00:00:00 2001
+From bbfcab3a0759b04b6a773ff6b2cab1b7baaebb7b Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 18:36:33 +0200
-Subject: [PATCH 24/28] pipeline: camss: Stream a small sensor mode with the
+Subject: [PATCH 24/29] pipeline: camss: Stream a small sensor mode with the
  IFE, cancel at stop
 
 The IFE line has no scaler, so the stream is the sensor output. The

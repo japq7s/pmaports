@@ -1,7 +1,7 @@
-From 789419f01b3209cf9900b9b92b35a8e099e41ada Mon Sep 17 00:00:00 2001
+From eae9a1ef39a7f5b81c5fe7f8d6ecc2bed134a402 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 18:28:36 +0200
-Subject: [PATCH 22/28] libcamera: pipeline_handler: Let a pipeline handler use
+Subject: [PATCH 22/29] libcamera: pipeline_handler: Let a pipeline handler use
  another's IPA
 
 IPA modules are matched by the name of the pipeline handler they are
