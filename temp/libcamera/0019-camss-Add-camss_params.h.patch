@@ -1,7 +1,7 @@
 From e4e0d5b6c817835d189a95a842a59c82e5b0e45f Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Sat, 2 May 2026 15:11:51 +0200
-Subject: [PATCH 19/32] camss: Add camss_params.h
+Subject: [PATCH 19/33] camss: Add camss_params.h
 
 Add header file definging the V4L2Params derived CamssParams class
 for OPE extensible ISP parameters support.

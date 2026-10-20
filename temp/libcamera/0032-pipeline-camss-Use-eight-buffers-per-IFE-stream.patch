@@ -1,7 +1,7 @@
 From 313d5ceb61dacaf0932786c0f87b815d71383f1c Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Tue, 20 Oct 2026 15:07:16 +0200
-Subject: [PATCH 32/32] pipeline: camss: Use eight buffers per IFE stream
+Subject: [PATCH 32/33] pipeline: camss: Use eight buffers per IFE stream
 
 Through PipeWire a frame also waits in the consumer and in GTK before
 its buffer comes back. With four buffers the IFE stream ran dry: the

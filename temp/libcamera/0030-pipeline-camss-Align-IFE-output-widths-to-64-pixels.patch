@@ -1,7 +1,7 @@
 From c7830c86a97f6f202128b3829b88dd88b76ec2ed Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Tue, 20 Oct 2026 14:47:12 +0200
-Subject: [PATCH 30/32] pipeline: camss: Align IFE output widths to 64 pixels
+Subject: [PATCH 30/33] pipeline: camss: Align IFE output widths to 64 pixels
 
 GTK applications import the NV12 buffers into Vulkan, and the Adreno
 driver (turnip) refuses linear planes whose pitch is not a multiple of

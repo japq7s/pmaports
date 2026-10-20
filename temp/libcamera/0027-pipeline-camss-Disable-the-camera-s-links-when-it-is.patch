@@ -1,7 +1,7 @@
 From 6457f46d2d2f55dbf763c0369aaf6f185a8584bb Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 19:05:11 +0200
-Subject: [PATCH 27/32] pipeline: camss: Disable the camera's links when it is
+Subject: [PATCH 27/33] pipeline: camss: Disable the camera's links when it is
  released
 
 The links the camss pipeline handler enables stay enabled after the
