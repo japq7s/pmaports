@@ -54,5 +54,14 @@ echo 0 > "$link/l1_2_aspm"
 echo 0 > "$link/l1_2_pcipm"
 set_threshold "$rp/config"
 set_threshold "$ep/config"
-echo 1 > "$link/l1_2_pcipm"
-echo 1 > "$link/l1_2_aspm"
+
+# L1.2 stays off: even with the downstream threshold the link still went
+# down in about half of the boots, 4.5-9 s after the first association
+# (14 of 30 boots, 2026-10-20), and earlier tests without L1.2 had none.
+# L1.1 stays on. SENNA_WLAN_L1_2=1 in /etc/default/senna-wlan restores it.
+SENNA_WLAN_L1_2=0
+[ -r /etc/default/senna-wlan ] && . /etc/default/senna-wlan
+if [ "$SENNA_WLAN_L1_2" = 1 ]; then
+	echo 1 > "$link/l1_2_pcipm"
+	echo 1 > "$link/l1_2_aspm"
+fi
