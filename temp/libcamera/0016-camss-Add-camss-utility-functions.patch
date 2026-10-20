@@ -1,7 +1,7 @@
 From 936a76ad511732a2289d0421f2ab1ea015942184 Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Thu, 23 Apr 2026 14:54:34 +0200
-Subject: [PATCH 16/33] camss: Add camss utility functions
+Subject: [PATCH 16/34] camss: Add camss utility functions
 
 Add camss_util.[h|cpp] files with some small helper functions shared
 between Camss* classes.

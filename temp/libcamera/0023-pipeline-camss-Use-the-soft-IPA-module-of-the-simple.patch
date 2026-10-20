@@ -1,7 +1,7 @@
 From a4a3703c05be4b22cdc4b4c1d77e786a7c032887 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Mon, 19 Oct 2026 18:28:36 +0200
-Subject: [PATCH 23/33] pipeline: camss: Use the soft IPA module of the simple
+Subject: [PATCH 23/34] pipeline: camss: Use the soft IPA module of the simple
  pipeline handler
 
 On v0.7.2 the soft IPA module is the simple pipeline handler's, which

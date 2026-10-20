@@ -1,7 +1,7 @@
 From dab36fa79a88948170f586aeafb4c1aa96d16acb Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Tue, 20 Oct 2026 15:30:33 +0200
-Subject: [PATCH 33/33] pipeline: camss: Register the largest sensor first
+Subject: [PATCH 33/34] pipeline: camss: Register the largest sensor first
 
 Applications open the first camera by default, which was the sensor on
 the lowest numbered CSI phy: the IMX355 ultra wide on senna, not its

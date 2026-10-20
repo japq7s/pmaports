@@ -1,7 +1,7 @@
 From 90a92c0ad4485caf02272813d8abd978258f92b6 Mon Sep 17 00:00:00 2001
 From: Hans de Goede <johannes.goede@oss.qualcomm.com>
 Date: Mon, 19 Oct 2026 18:14:06 +0200
-Subject: [PATCH 17/33] camss: Add camss pipeline handler
+Subject: [PATCH 17/34] camss: Add camss pipeline handler
 
 Add a CAMSS pipeline handler. This initial version basically replaces
 the simple pipeline handler camss support and still depends on

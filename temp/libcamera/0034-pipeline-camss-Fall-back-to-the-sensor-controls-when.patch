@@ -1,0 +1,54 @@
+From 4e31d063fca8bced09260a64a4f6c70bdb0e8a19 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 15:42:05 +0200
+Subject: [PATCH 34/34] pipeline: camss: Fall back to the sensor controls when
+ none are queued
+
+The camss pipeline handler has no frame start events, so DelayedControls
+only advances with the sensor controls the IPA sends back, which can lag
+behind the frames completing. For a frame whose entry was not written
+yet, get() returns empty values and the soft IPA asserts on them: cam
+aborted after four frames at 4096x3072 ("Assertion failed: type_ ==
+details::control_type..." in ControlValue::get<int>).
+
+Use the controls the sensor currently runs with in that case.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss.cpp | 20 +++++++++++++++++++-
+ 1 file changed, 19 insertions(+), 1 deletion(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss.cpp b/src/libcamera/pipeline/camss/camss.cpp
+index 8902596..a01ef0b 100644
+--- a/src/libcamera/pipeline/camss/camss.cpp
++++ b/src/libcamera/pipeline/camss/camss.cpp
+@@ -754,7 +754,25 @@ void CamssCameraData::frameStart(uint32_t sequence)
+ 
+ void CamssCameraData::statsReady(uint32_t frame, uint32_t statsBufferId)
+ {
+-	isp_->processStats(frame, statsBufferId, delayedCtrls_->get(frame));
++	ControlList sensorControls = delayedCtrls_->get(frame);
++
++	/*
++	 * Without frame start events DelayedControls is only advanced by the
++	 * IPA's sensor controls, which can lag behind the frames completing:
++	 * the entry for this frame may not have been written yet. The soft IPA
++	 * asserts on an empty value, use what the sensor runs with instead.
++	 */
++	if (sensorControls.get(V4L2_CID_EXPOSURE).isNone() ||
++	    sensorControls.get(V4L2_CID_ANALOGUE_GAIN).isNone())
++	{
++		static const std::array<uint32_t, 2> ids = {
++			V4L2_CID_EXPOSURE, V4L2_CID_ANALOGUE_GAIN,
++		};
++
++		sensorControls = csi_->sensor()->getControls(ids);
++	}
++
++	isp_->processStats(frame, statsBufferId, sensorControls);
+ }
+ 
+ REGISTER_PIPELINE_HANDLER(PipelineHandlerCamss, "camss")
+-- 
+2.55.0
+
