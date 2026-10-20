@@ -1,7 +1,7 @@
 From b7fb17fa3b1c9c5b89f31b0b9ef91b53686db270 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Sun, 18 Oct 2026 14:30:05 +0200
-Subject: [PATCH 10/31] libcamera: software_isp: Add a focus measure to the
+Subject: [PATCH 10/32] libcamera: software_isp: Add a focus measure to the
  statistics
 
 The software ISP statistics only carry channel sums and a luminance

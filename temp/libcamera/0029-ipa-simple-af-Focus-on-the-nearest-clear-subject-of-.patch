@@ -1,7 +1,7 @@
 From e8078f94166e486931ac7bbfc3874a96841a03bb Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Tue, 20 Oct 2026 14:39:54 +0200
-Subject: [PATCH 29/31] ipa: simple: af: Focus on the nearest clear subject of
+Subject: [PATCH 29/32] ipa: simple: af: Focus on the nearest clear subject of
  a 3x3 zone grid
 
 The focus measure only covered the centre third of the frame, so a

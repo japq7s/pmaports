@@ -1,7 +1,7 @@
 From e7ed70c63a66fc16166fcc75bde6539ecfc60039 Mon Sep 17 00:00:00 2001
 From: japq7s <japiotr123@proton.me>
 Date: Sun, 18 Oct 2026 14:30:05 +0200
-Subject: [PATCH 12/31] ipa: simple: Add contrast detection autofocus
+Subject: [PATCH 12/32] ipa: simple: Add contrast detection autofocus
 
 Add an Af algorithm for the soft IPA, enabled by an Af entry in the
 tuning file, using the focus measure of the software ISP statistics

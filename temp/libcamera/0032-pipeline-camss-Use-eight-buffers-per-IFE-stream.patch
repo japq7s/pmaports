@@ -1,0 +1,73 @@
+From 313d5ceb61dacaf0932786c0f87b815d71383f1c Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 15:07:16 +0200
+Subject: [PATCH 32/32] pipeline: camss: Use eight buffers per IFE stream
+
+Through PipeWire a frame also waits in the consumer and in GTK before
+its buffer comes back. With four buffers the IFE stream ran dry: the
+PipeWire camera node counted an error for about every second frame and
+snapshot showed 15 to 20 fps, while plasma-camera, which uses libcamera
+directly, kept 30. Default IFE streams to eight buffers.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss_isp_ife.cpp | 15 +++++++++++----
+ 1 file changed, 11 insertions(+), 4 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index a019421..8c8836b 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -103,6 +103,13 @@ void scalerRects(const Size &raw, const Size &out, Rectangle *compose, Rectangle
+ 			  ((scaled.height - out.height) / 2) & ~1u, out);
+ }
+ 
++/*
++ * Buffers per stream. Through PipeWire the frames also wait in the consumer
++ * and in GTK; with four, the camera ran out of buffers and the node reported
++ * an error for every second frame (15-20 fps in snapshot).
++ */
++constexpr unsigned int kIfeBufferCount = 8;
++
+ /* Statistics for one frame in kStatsPeriod, as SwStatsCpu */
+ constexpr unsigned int kStatsPeriod = 4;
+ 
+@@ -276,7 +283,7 @@ StreamConfiguration CamssIspIfe::generateConfiguration(const StreamConfiguration
+ 	StreamConfiguration cfg{ StreamFormats{ formats } };
+ 	cfg.size = raw.size;
+ 	cfg.pixelFormat = formats::NV12;
+-	cfg.bufferCount = kBufferCount;
++	cfg.bufferCount = kIfeBufferCount;
+ 
+ 	return cfg;
+ }
+@@ -305,7 +312,7 @@ StreamConfiguration CamssIspIfe::validate(const StreamConfiguration &raw,
+ 	cfg.frameSize = 0;
+ 	for (unsigned int i = 0; i < format.planesCount; i++)
+ 		cfg.frameSize += format.planes[i].size;
+-	cfg.bufferCount = std::max(kBufferCount, req.bufferCount);
++	cfg.bufferCount = std::max(kIfeBufferCount, req.bufferCount);
+ 	cfg.setStream(const_cast<Stream *>(&outStream_));
+ 
+ 	return cfg;
+@@ -535,7 +542,7 @@ void CamssIspIfe::paramsComputed(uint32_t frame)
+ 
+ 	applied_[frame] = applied;
+ 	/* Keep the parameters of the frames still in flight */
+-	while (applied_.size() > 2 * kBufferCount + 4)
++	while (applied_.size() > 2 * kIfeBufferCount + 4)
+ 		applied_.erase(applied_.begin());
+ 
+ 	info->paramBuffer->_d()->metadata().planes()[0].bytesused = params.bytesused();
+@@ -560,7 +567,7 @@ void CamssIspIfe::parameterBufferReady(FrameBuffer *buffer)
+ 	if (it != applied_.end() &&
+ 	    buffer->metadata().status == FrameMetadata::FrameSuccess) {
+ 		effective_[buffer->metadata().sequence] = it->second;
+-		while (effective_.size() > 2 * kBufferCount + 4)
++		while (effective_.size() > 2 * kIfeBufferCount + 4)
+ 			effective_.erase(effective_.begin());
+ 	}
+ 
+-- 
+2.55.0
+
