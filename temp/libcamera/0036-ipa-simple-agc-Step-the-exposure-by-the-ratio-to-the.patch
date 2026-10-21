@@ -1,0 +1,94 @@
+From b8882931729a69b22bb524b64a5005b9e9f54c27 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Tue, 20 Oct 2026 15:56:17 +0200
+Subject: [PATCH 36/38] ipa: simple: agc: Step the exposure by the ratio to the
+ target
+
+Going from a room to daylight changes the exposure by a factor of a few
+hundred, and steps of 10% at most per update took tens of updates; with
+statistics on one frame in four the image stayed overexposed for many
+seconds. Moderate changes were slow too: 4% per update at an MSV error
+of 1, seconds for a scene two or three times brighter or darker.
+
+The histogram holds linear sensor values, so while little is clipped the
+MSV is about 5 mean / range + 0.5 and the exposure that reaches the
+target is (2.5 - 0.5) / (MSV - 0.5) times the one the statistics were
+taken with. Scale by that ratio, damped with an exponent of 0.8 and
+bounded to 0.25-4x per update. As the update is relative to the exposure
+of the measured frame, a correction that has not reached the sensor yet
+is not applied twice. In a simulation with the sensor delay and one
+update in four frames, 2-300x off now converges in 12-32 frames, the old
+steps took 100 frames or more.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/ipa/simple/algorithms/agc.cpp | 43 ++++++++++++++-----------------
+ 1 file changed, 19 insertions(+), 24 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index a13a755..7fcae33 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -40,26 +40,21 @@ static constexpr float kExposureOptimal = kExposureBinsCount / 2.0;
+ static constexpr float kExposureSatisfactory = 0.2;
+ 
+ /*
+- * Proportional gain for exposure/gain adjustment. Maps the MSV error to a
+- * multiplicative correction factor:
++ * The histogram holds sensor values, linear in the exposure. A value v of the
++ * range R falls in bin floor(5 v / R), so while little is clipped the MSV is
++ * about 5 mean / R + 0.5, and the exposure that reaches the target is
++ * (kExposureOptimal - 0.5) / (MSV - 0.5) times the current one.
+  *
+- *   factor = 1.0 + kExpProportionalGain * error
+- *
+- * With kExpProportionalGain = 0.04:
+- *   - max error ~2.5 -> factor 1.10 (~10% step, same as before)
+- *   - error 1.0      -> factor 1.04 (~4% step)
+- *   - error 0.3      -> factor 1.012 (~1.2% step)
+- *
+- * This replaces the fixed 10% bang-bang step with a proportional correction
+- * that converges smoothly and avoids overshooting near the target.
+- */
+-static constexpr float kExpProportionalGain = 0.04;
+-
+-/*
+- * Maximum multiplicative step per frame, to bound the correction when the
+- * scene changes dramatically.
++ * Steps proportional to the MSV error, of 4% at an error of 1, took tens of
++ * updates for a few times brighter or darker scene: with statistics on one
++ * frame in four, seconds. Move by that ratio instead, damped with an exponent
++ * against noise and clipping, and bounded per update. The update is relative
++ * to the exposure the statistics were taken with, so a correction that has
++ * not reached the sensor yet is not applied twice.
+  */
+-static constexpr float kExpMaxStep = 0.15;
++static constexpr float kExpDamping = 0.8;
++static constexpr float kExpMinFactor = 0.25;
++static constexpr float kExpMaxFactor = 4.0;
+ 
+ Agc::Agc()
+ {
+@@ -76,13 +71,13 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 		return;
+ 
+ 	/*
+-	 * Compute a proportional correction factor. The sign of the error
+-	 * determines the direction: positive error means too dark (increase),
+-	 * negative means too bright (decrease).
++	 * A positive error means too dark (increase), a negative one too
++	 * bright (decrease). The MSV is at least 1.
+ 	 */
+-	float step = std::clamp(static_cast<float>(error) * kExpProportionalGain,
+-				-kExpMaxStep, kExpMaxStep);
+-	float factor = 1.0f + step;
++	float ratio = (kExposureOptimal - 0.5f) /
++		      std::max(static_cast<float>(exposureMSV) - 0.5f, 0.1f);
++	float factor = std::clamp(std::pow(ratio, kExpDamping),
++				  kExpMinFactor, kExpMaxFactor);
+ 
+ 	if (factor > 1.0f) {
+ 		/* Scene too dark: increase exposure first, then gain. */
+-- 
+2.55.0
+

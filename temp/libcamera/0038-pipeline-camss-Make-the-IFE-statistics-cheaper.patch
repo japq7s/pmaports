@@ -1,0 +1,155 @@
+From dec131e41a85015efa1d2518a28c5e9c9b237b71 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Wed, 21 Oct 2026 21:34:27 +0200
+Subject: [PATCH 38/38] pipeline: camss: Make the IFE statistics cheaper
+
+The IFE statistics are computed in the camera manager thread before a
+request completes. They took 3 ms on a big core and 15 to 22 ms on a
+little one, and the delayed request then often completed together with
+the next: PipeWire's libcamera source triggers a graph cycle per request,
+the consumer had not run for the first one yet, and the frame was lost.
+Snapshot showed 18 fps out of 30 in bursts, while libcamerasrc and cam
+received every frame.
+
+Fold the inverse colour correction, the gains and the black level into
+one single precision affine map, sample every eighth pixel of every
+eighth line for the colour statistics (14400 samples at 1080p), and sum
+the focus measure per line in 32 bit. Same results for the same
+samples, 10.1 -> 6.4 ms for the old sampling on a little core.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ .../pipeline/camss/camss_isp_ife.cpp          | 87 +++++++++++--------
+ 1 file changed, 52 insertions(+), 35 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index cf936c2..89e7289 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -113,8 +113,17 @@ constexpr unsigned int kIfeBufferCount = 8;
+ /* Statistics for one frame in kStatsPeriod, as SwStatsCpu */
+ constexpr unsigned int kStatsPeriod = 4;
+ 
+-/* Statistics sample every kStatsStep pixels of the central 2/3 of the frame */
+-constexpr unsigned int kStatsStep = 4;
++/*
++ * The colour statistics sample every kStatsStep pixels of every kStatsStep
++ * lines of the central 2/3 of the frame (14400 samples at 1920x1080). They
++ * run in the camera manager thread and hold back the request: at a step of
++ * 4 they took up to 20 ms on a little core, the requests completed in pairs
++ * and PipeWire dropped frames.
++ */
++constexpr unsigned int kStatsStep = 8;
++
++/* The focus measure uses every kFocusLineStep line, at full resolution */
++constexpr unsigned int kFocusLineStep = 4;
+ 
+ /* The same curve as DebayerCpu::updateGammaTable() */
+ std::array<uint8_t, 256> gammaLut(float gamma, float contrastExp)
+@@ -626,7 +635,23 @@ void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &ap
+ 	if (!ok)
+ 		inv = Matrix<float, 3, 3>::identity();
+ 
+-	const double bl = applied.blackLevel;
++	/*
++	 * The inverse colour correction, the gains and the black level as one
++	 * affine map from linear RGB to 8 bit sensor values, rounding included.
++	 */
++	const float bl = applied.blackLevel;
++	float m[3][3];
++	for (unsigned int c = 0; c < 3; c++)
++		for (unsigned int j = 0; j < 3; j++)
++			m[c][j] = inv[c][j] / std::max(applied.gains[c], 1e-3) *
++				  (1.0f - bl) * 255.0f;
++	const float offset = bl * 255.0f + 0.5f;
++
++	/* Truncate a value already offset by 0.5: rounds as std::lround() */
++	auto level = [](float v) {
++		return static_cast<unsigned int>(std::clamp(v, 0.0f, 255.0f));
++	};
++
+ 	SwIspStats stats{};
+ 
+ 	const unsigned int x0 = (size_.width / 6) & ~1u;
+@@ -639,34 +664,23 @@ void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &ap
+ 		const uint8_t *cl = &uv[(row / 2) * stride];
+ 
+ 		for (unsigned int col = x0; col < x1; col += kStatsStep) {
+-			const float l = yl[col];
++			const float l = yl[col] + 0.5f;
+ 			const float cb = cl[col & ~1u] - 128.0f;
+ 			const float cr = cl[(col & ~1u) + 1] - 128.0f;
+ 
+-			const float rgb[3] = {
+-				l + 1.402f * cr,
+-				l - 0.344136f * cb - 0.714136f * cr,
+-				l + 1.772f * cb,
+-			};
+-
+-			float lin[3];
+-			for (unsigned int c = 0; c < 3; c++)
+-				lin[c] = linear[std::clamp<long>(std::lround(rgb[c]), 0, 255)];
+-
+-			unsigned int raw[3];
+-			for (unsigned int c = 0; c < 3; c++) {
+-				double v = inv[c][0] * lin[0] + inv[c][1] * lin[1] +
+-					   inv[c][2] * lin[2];
+-				v /= std::max(applied.gains[c], 1e-3);
+-				v = v * (1.0 - bl) + bl;
+-				raw[c] = std::clamp<long>(std::lround(v * 255.0), 0, 255);
+-			}
++			const float lr = linear[level(l + 1.402f * cr)];
++			const float lg = linear[level(l - 0.344136f * cb - 0.714136f * cr)];
++			const float lb = linear[level(l + 1.772f * cb)];
+ 
+-			stats.sum_.r() += raw[0];
+-			stats.sum_.g() += raw[1];
+-			stats.sum_.b() += raw[2];
++			const unsigned int r = level(m[0][0] * lr + m[0][1] * lg + m[0][2] * lb + offset);
++			const unsigned int g = level(m[1][0] * lr + m[1][1] * lg + m[1][2] * lb + offset);
++			const unsigned int b = level(m[2][0] * lr + m[2][1] * lg + m[2][2] * lb + offset);
+ 
+-			unsigned int luma = raw[0] * 77 + raw[1] * 150 + raw[2] * 29;
++			stats.sum_.r() += r;
++			stats.sum_.g() += g;
++			stats.sum_.b() += b;
++
++			unsigned int luma = r * 77 + g * 150 + b * 29;
+ 			stats.yHistogram[luma * SwIspStats::kYHistogramSize / (256 * 256)]++;
+ 		}
+ 	}
+@@ -687,19 +701,22 @@ void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &ap
+ 			const unsigned int fx0 = gx0 + gw * c / zx, fx1 = gx0 + gw * (c + 1) / zx;
+ 			const unsigned int fy0 = gy0 + gh * r / zy, fy1 = gy0 + gh * (r + 1) / zy;
+ 
+-			for (unsigned int row = fy0; row < fy1; row += kStatsStep) {
++			for (unsigned int row = fy0; row < fy1; row += kFocusLineStep) {
+ 				const uint8_t *yl = &y[row * stride];
+-				int64_t prev = -1;
++				const unsigned int first = fx0 & ~1u;
++				uint32_t squares = 0, sum = yl[first], count = 1;
+ 
+-				for (unsigned int col = fx0 & ~1u; col < fx1; col += 2) {
+-					int64_t cur = yl[col];
++				for (unsigned int col = first + 2; col < fx1; col += 2) {
++					int d = yl[col] - yl[col - 2];
+ 
+-					if (prev >= 0)
+-						zone.squares += (cur - prev) * (cur - prev);
+-					zone.sum += cur;
+-					zone.count++;
+-					prev = cur;
++					squares += d * d;
++					sum += yl[col];
++					count++;
+ 				}
++
++				zone.squares += squares;
++				zone.sum += sum;
++				zone.count += count;
+ 			}
+ 		}
+ 	}
+-- 
+2.55.0
+

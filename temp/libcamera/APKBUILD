@@ -3,7 +3,7 @@ maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
 pkgver=9999$_pkgver
-pkgrel=21
+pkgrel=22
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -93,8 +93,9 @@ source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_pkgver/libc
 	0033-pipeline-camss-Register-the-largest-sensor-first.patch
 	0034-pipeline-camss-Fall-back-to-the-sensor-controls-when.patch
 	0035-pipeline-camss-Run-the-sensor-in-its-full-mode-with-.patch
-	0036-ipa-simple-agc-Take-large-steps-far-from-the-target-.patch
+	0036-ipa-simple-agc-Step-the-exposure-by-the-ratio-to-the.patch
 	0037-pipeline-camss-List-common-4-3-and-16-9-IFE-output-s.patch
+	0038-pipeline-camss-Make-the-IFE-statistics-cheaper.patch
 	qcam.desktop
 	$_tuning_files
 	"
@@ -244,8 +245,9 @@ bafcc8f5c2bef7dd3c8741ff6a9aad56ca0132dede2de54701682d5e8d3d94fc3e3315667343fe27
 c1cd02a4ec56f4f1aebd830fbad0f19e39e5efd45c35d35b03f15d30faa5b8d58c8a33dee471611cd787d2d43130c8bce1c9c1497e9c7289d42df6e8c1fe424f  0033-pipeline-camss-Register-the-largest-sensor-first.patch
 0e59dd88b7e6e773dd390c3c76c1ff1d3e604be34e4d245614997116db7a77fe62608b0eb1e7f8fbd65ac34b61462ec2ee7cf6d8d65c6daa44436bfb38049445  0034-pipeline-camss-Fall-back-to-the-sensor-controls-when.patch
 be453ed0013a35520cd6eacdee425cef12497bcded12e45258310275b5573dcbd72b2990bbef39668476c6222c942ad683ffc53f0a66acfdfae69d93d33dd75a  0035-pipeline-camss-Run-the-sensor-in-its-full-mode-with-.patch
-75909879d9e048fb7114cbcae037fbc18dc938e592b0b22538224a9dc75d20b715cc5a2ac4cdc4862245d2196172837f85875a18ac230af6cc4394dc1f134f4f  0036-ipa-simple-agc-Take-large-steps-far-from-the-target-.patch
+3d5d1070ef12c953f172e9751583b77b7a803c8314260a0e0567232bce75e52d39373f62275022adbd1a80051d2a21550898ace0bdbb1c363aff84f6ebe370f2  0036-ipa-simple-agc-Step-the-exposure-by-the-ratio-to-the.patch
 560755cc199c969bc3fefe68b69c4bbd94dbfe9abe21a7c2c282183709111f66196c11263bd3dd8daa0c3bc11259b49ff302bb288aaf5bcf414ceaa3af7daf2c  0037-pipeline-camss-List-common-4-3-and-16-9-IFE-output-s.patch
+7282dfc9012ea9e41828f423cd93c15a8e651182db1f9c3b001eb2e0d02689bcdc1314b4f276a64cc9bf542bce98cd2211d8d974b4e565b9aa33d69ebbd6626c  0038-pipeline-camss-Make-the-IFE-statistics-cheaper.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml
