@@ -1,0 +1,117 @@
+From f3fedce3cebce60cc089aacdc4e35fb3605eed04 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Wed, 21 Oct 2026 22:50:58 +0200
+Subject: [PATCH 40/40] ipa: simple: af: Start the first scan in a noisy scene
+ too
+
+At stream start continuous AF waits for three stable measurements, but
+out of focus in a dim room the focus measure is mostly noise and jumps
+by more than 10% between measurements: the first scan did not start for
+tens of seconds and the image stayed blurred until a close object made
+the measure stable. Scan after eight measurements (about a second with
+statistics on one frame in four) even if the scene never looked stable.
+Scene changes after a scan still wait for stability, so noise does not
+make a focused lens hunt.
+
+Scene changes were also detected on the mean luminance, which AE brings
+to the same level for every scene. Compare the mean over the exposure
+time and gain the frame was taken with instead.
+
+Offline harness, 30% measurement noise: focused at frame 101 instead of
+721; static, change, dim, flat, macro and zone cases unchanged.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/ipa/simple/algorithms/af.cpp | 33 ++++++++++++++++++++++++++++++--
+ src/ipa/simple/algorithms/af.h   |  1 +
+ 2 files changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index 0833901..ce0e038 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -65,6 +65,13 @@ static constexpr unsigned int kSceneChangedCount = 3;
+ static constexpr double kStableContrast = 0.1;
+ static constexpr double kStableMean = 0.05;
+ static constexpr unsigned int kStableCount = 3;
++/*
++ * Measurements to wait for a stable scene at stream start before scanning
++ * anyway. Out of focus in a dim room the measure is mostly noise and jitters
++ * by more than kStableContrast between measurements: the first scan then did
++ * not start for tens of seconds and the image stayed blurred.
++ */
++static constexpr unsigned int kMaxWait = 8;
+ 
+ /* Zone selection: weight of the centre zone, share of the strongest peak. */
+ static constexpr double kCentreWeight = 1.5;
+@@ -142,6 +149,7 @@ void Af::waitForStableScene()
+ 	needReference_ = false;
+ 	changePending_ = true;
+ 	stable_ = 0;
++	waited_ = 0;
+ 	lastContrast_ = 0.0;
+ 	lastMean_ = 0.0;
+ }
+@@ -444,6 +452,7 @@ void Af::monitor(IPAContext &context, double contrast, double mean)
+ 		if (changed_ >= kSceneChangedCount) {
+ 			changePending_ = true;
+ 			stable_ = 0;
++			waited_ = 0;
+ 			LOG(IPASoftAf, Debug) << "Scene changed";
+ 		}
+ 	} else {
+@@ -453,7 +462,15 @@ void Af::monitor(IPAContext &context, double contrast, double mean)
+ 		else
+ 			stable_ = 0;
+ 
+-		if (stable_ >= kStableCount && mode_ == controls::AfModeContinuous)
++		/*
++		 * At stream start the lens may be anywhere: scan after a while
++		 * even if the scene does not look stable. After a scene change
++		 * the lens was focused and noise alone must not make it hunt.
++		 */
++		if (state_ == State::Waiting)
++			waited_++;
++		if ((stable_ >= kStableCount || waited_ >= kMaxWait) &&
++		    mode_ == controls::AfModeContinuous)
+ 			startScan(context);
+ 	}
+ 
+@@ -529,9 +546,21 @@ void Af::process(IPAContext &context,
+ 		break;
+ 	case State::Waiting:
+ 	case State::Focused:
+-	case State::Failed:
++	case State::Failed: {
++		/*
++		 * AE brings every scene to the same mean: compare the scene
++		 * brightness, the mean over the exposure and gain the frame
++		 * was taken with (set by Agc, which runs first). Turning the
++		 * camera to another scene of the same contrast, with the lens
++		 * out of focus, otherwise went unnoticed.
++		 */
++		const auto exposure = metadata.get(controls::ExposureTime);
++		const auto gain = metadata.get(controls::AnalogueGain);
++		if (exposure && gain && *exposure > 0 && *gain > 0.0f)
++			mean /= *exposure * static_cast<double>(*gain);
+ 		monitor(context, contrast, mean);
+ 		break;
++	}
+ 	case State::Idle:
+ 		break;
+ 	}
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+index 1ed66b9..8f16f6e 100644
+--- a/src/ipa/simple/algorithms/af.h
++++ b/src/ipa/simple/algorithms/af.h
+@@ -103,6 +103,7 @@ private:
+ 	double lastMean_ = 0.0;
+ 	unsigned int changed_ = 0;
+ 	unsigned int stable_ = 0;
++	unsigned int waited_ = 0;
+ 	bool changePending_ = false;
+ };
+ 
+-- 
+2.55.0
+
