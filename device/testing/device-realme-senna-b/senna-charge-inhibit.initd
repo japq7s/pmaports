@@ -1,0 +1,16 @@
+#!/sbin/openrc-run
+
+description="Block system sleep while charging (oplus_chg temperature monitoring)"
+
+command=/usr/libexec/senna-charge-inhibit
+command_background=true
+pidfile="/run/$RC_SVCNAME.pid"
+output_log="/var/log/$RC_SVCNAME.log"
+error_log="/var/log/$RC_SVCNAME.log"
+# The script runs in its own process group and stops all of it on TERM
+retry="TERM/5/KILL/2"
+
+depend() {
+	need dbus udev
+	use elogind
+}

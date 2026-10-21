@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=40
+pkgrel=41
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -42,10 +42,12 @@ makedepends="devicepkg-dev"
 # The PAL nodes live in the sound server: one subpackage per audio backend,
 # pulled in by the backend chosen for postmarketos-base-ui.
 subpackages="
+	$pkgname-openrc
 	$pkgname-pulseaudio:_pulseaudio
 	$pkgname-pipewire:_pipewire
 "
 # AudioReach board configuration replaces the reference files of these
+install="$pkgname-openrc.post-install"
 replaces="audioreach-conf audioreach-graphmgr audioreach-pal"
 source="
 	deviceinfo
@@ -88,6 +90,9 @@ source="
 	audio-usecaseKvManager.xml
 	oplus-chg-blacklist.conf
 	oplus-chg-modules-load.conf
+	senna-charge-inhibit
+	senna-charge-inhibit.service
+	senna-charge-inhibit.initd
 	wake-alarm.conf
 	72-senna-haptics.rules
 	senna-touch-blacklist.conf
@@ -239,6 +244,14 @@ package() {
 		"$pkgdir"/usr/lib/modprobe.d/oplus-chg.conf
 	install -Dm644 "$srcdir"/oplus-chg-modules-load.conf \
 		"$pkgdir"/usr/lib/modules-load.d/oplus-chg.conf
+
+	# No sleep while charging: oplus_chg watches the USB port temperature
+	install -Dm755 "$srcdir"/senna-charge-inhibit \
+		"$pkgdir"/usr/libexec/senna-charge-inhibit
+	install -Dm644 "$srcdir"/senna-charge-inhibit.service \
+		"$pkgdir"/usr/lib/systemd/system/senna-charge-inhibit.service
+	install -Dm755 "$srcdir"/senna-charge-inhibit.initd \
+		"$pkgdir"/etc/init.d/senna-charge-inhibit
 }
 
 _pulseaudio() {
@@ -275,7 +288,7 @@ f1640277ea91695b66d1e4bb01921fed95569d589d1ba5716803a44c3753a8d8a455e636958107b3
 24f9a94de7d01763435b8f3c65a65cf018b28608517f9f212405eae764ec23c5bcbe69fb2cbe44a1ee0d6c85b76924feceb5e4a73a19cb29791c0f6ad737b265  wireplumber-senna.conf
 2ae28242250408247f423da72b7cc9aeb94cb2dd1bcdea8fc22b5725918a16368283cf1556de9e5a5470c7ed153050a69ea28a2506dd8c4775a9fcf7f50cec08  61-senna-fastrpc-sdsp.rules
 e2c113899cf6a375cf1bf75ef418b984fe7e3873bdd85126415d1c4b7d6b9f9f18b3fcf6358bc3bc1f08007625824d53bbb30a8ec8a31f1c40d09d7ff9141dbe  81-libssc-senna.rules
-ddd649d78a2d6de0ca61f4bfb56ef1dd46ad467dc3f5a75518be8043dc76bb4c3382c72f8179c8b5ed509ac5b432529d798f3ed811c8cff858d64d9b0c4efff5  80-senna.preset
+56a35051db2168b466f473dea9f11e3f056aeb8b4a7894fb7d0b82f6b9c862521b0d59ba288f303e3dafb703293cf6b69f880dc163b01861ee08de6019209984  80-senna.preset
 454f10261d834dccd61e1315a5b42dacbe7f592ec29d8af45cc04c1a8f5e01dbe7d50ebe64b88ae6d0113aebe112cbffcf71766c53072ef5d2c04b9837c61183  senna-mark-boot-successful
 f4b93fc97eaef0e1a1211a2f3fe2af4070e8e1206fef37435fd9cae55a4e77e8239cec95e2505347ef0c37553438c7e0a5e34e150484b15d999f8efb0084d04f  senna-mark-boot-successful.service
 1bb56434e6d15ea1b0e29db9c0a0d25d272d72a1aa6040bf571a9d03f34ffecfcbc4609eaaf2869bd7fa568e21b1928eb366a92312fbbb78d222b65a50f72847  senna-mark-boot-successful.timer
@@ -307,4 +320,7 @@ a58e7e08c1b88c300e3142acbc59bf7dd835d3140c1631ee265459bd952f4eb305551a2ded9fb5fa
 aa4a01d76e1e0c3b415766c129bab43a910039c60755ebd3eb2a1c1706545ebc706cb146d966d12394ee9b2481a2506e9bbe5d9f2d691f71fab1efcf78454307  megapixels-Wide.dcp
 93185321705b609a3f270397aa999cf05b3c4a3f2266ccd783a8c4a53dab790ad79ffe6ea8902e72ea23245a0dbd42d79d17b7df0a906035e4f6f05582c673d7  megapixels-postprocess.sh
 48eb07b04d5140b37a72e72081448806fd9031524c9bfe125656ea8bac8a240db682d9a5adce1f0e95d57625a83c0e4617d2123b7ebb47476a9eadd489629964  72-senna-flash.rules
+9224531e465f0ad7ff041bd64991bcb32690768cb931aef5abc4bfc5035f1b83c61808a3ea09914f0002e556b935ca3c0942571d930ec4bc9f96907e68455de0  senna-charge-inhibit
+fdbb0fe600676e8b668312e8c6b17afc0a8047b27ac2ad3009a7b382bc6b207980c19e6fb0992a519603b0eeaa491a284e5ec7aac8f56d11222c78e66102052e  senna-charge-inhibit.service
+2f8e284c9d3d354a10544c06bb2aba3cf8bfabf173589581a1fc52d13734f6354b07633aaede0959105e42c851f0df04087678ad4fecd2d1f7549b091a67d65e  senna-charge-inhibit.initd
 "

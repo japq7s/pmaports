@@ -1,0 +1,4 @@
+#!/bin/sh
+# Block system sleep while charging (see /usr/libexec/senna-charge-inhibit)
+rc-update -q add senna-charge-inhibit default
+exit 0

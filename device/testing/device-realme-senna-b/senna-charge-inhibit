@@ -1,0 +1,64 @@
+#!/bin/sh
+# Block system sleep while a charger is connected.
+#
+# oplus_chg watches the USB connector temperature (cutting VBUS when it
+# overheats) and steps the charge current with the battery temperature from
+# the application processor. It holds a kernel wakeup source while charging,
+# which Android honours, but logind suspends regardless: take a logind sleep
+# inhibitor instead for as long as the usb or wireless supply is online.
+# Works with systemd-logind and elogind (OpenRC).
+
+SUPPLIES="/sys/class/power_supply/usb /sys/class/power_supply/wireless"
+WHY="Charging: oplus_chg watches the USB port and battery temperature"
+
+if command -v systemd-inhibit >/dev/null 2>&1; then
+	INHIBIT=systemd-inhibit
+else
+	INHIBIT=elogind-inhibit
+fi
+
+child=
+
+charging() {
+	for s in $SUPPLIES; do
+		[ "$(cat "$s/online" 2>/dev/null)" = 1 ] && return 0
+	done
+	return 1
+}
+
+update() {
+	# The inhibitor fails while logind is not up yet: start it again
+	if [ -n "$child" ] && ! kill -0 "$child" 2>/dev/null; then
+		child=
+	fi
+
+	if charging; then
+		[ -n "$child" ] && return
+		"$INHIBIT" --what=sleep --mode=block --who=senna-charge-inhibit \
+			--why="$WHY" tail -f /dev/null &
+		child=$!
+		echo "charger connected, sleep blocked"
+	elif [ -n "$child" ]; then
+		kill "$child"
+		child=
+		echo "charger disconnected, sleep allowed"
+	fi
+}
+
+# The service runs in its own process group: stopping it takes the
+# inhibitor, udevadm and the loops down with it.
+trap 'trap - TERM INT; kill 0' TERM INT
+
+# One check at start (charger plugged in at boot), then one per
+# power_supply uevent. A check every minute as well, in case logind came up
+# after the charger was plugged in.
+{
+	echo start
+	udevadm monitor --udev --subsystem-match=power_supply &
+	while sleep 60; do echo tick; done
+} | while read -r _; do
+	update
+done &
+
+# A trap only runs once a foreground command returns; wait is interrupted
+wait

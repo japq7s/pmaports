@@ -1,0 +1,11 @@
+[Unit]
+Description=Block system sleep while charging (oplus_chg temperature monitoring)
+After=systemd-logind.service systemd-udevd.service
+
+[Service]
+ExecStart=/usr/libexec/senna-charge-inhibit
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

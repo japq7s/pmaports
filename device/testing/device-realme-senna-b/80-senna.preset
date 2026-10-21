@@ -6,3 +6,4 @@ enable hexagonrpcd-sdsp.service
 enable senna-sensors-setup.service
 enable senna-mark-boot-successful.timer
 enable senna-ois.service
+enable senna-charge-inhibit.service
