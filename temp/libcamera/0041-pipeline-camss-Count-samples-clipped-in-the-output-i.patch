@@ -1,0 +1,60 @@
+From b4273cb8f5868495d001a2f49629073bec58eb3e Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Thu, 22 Oct 2026 13:44:04 +0200
+Subject: [PATCH 41/42] pipeline: camss: Count samples clipped in the output in
+ the top bin
+
+The IFE statistics undo the gamma curve, the colour correction and the
+gains per sample. A sample clipped in the output, the sky through a
+window, comes back at full scale divided by the gains: about 0.8 of the
+range with daylight gains of 2.0 and 1.7 for red and blue. The top of the
+histogram stayed empty with a third of the frame white, and the exposure
+could not tell clipped highlights from bright ones.
+
+Count a sample with any output component at 255 in the top bin of the
+luminance histogram. The colour sums are left as they were.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/libcamera/pipeline/camss/camss_isp_ife.cpp | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/src/libcamera/pipeline/camss/camss_isp_ife.cpp b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+index 89e7289..d3c9cf1 100644
+--- a/src/libcamera/pipeline/camss/camss_isp_ife.cpp
++++ b/src/libcamera/pipeline/camss/camss_isp_ife.cpp
+@@ -668,9 +668,12 @@ void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &ap
+ 			const float cb = cl[col & ~1u] - 128.0f;
+ 			const float cr = cl[(col & ~1u) + 1] - 128.0f;
+ 
+-			const float lr = linear[level(l + 1.402f * cr)];
+-			const float lg = linear[level(l - 0.344136f * cb - 0.714136f * cr)];
+-			const float lb = linear[level(l + 1.772f * cb)];
++			const unsigned int outR = level(l + 1.402f * cr);
++			const unsigned int outG = level(l - 0.344136f * cb - 0.714136f * cr);
++			const unsigned int outB = level(l + 1.772f * cb);
++			const float lr = linear[outR];
++			const float lg = linear[outG];
++			const float lb = linear[outB];
+ 
+ 			const unsigned int r = level(m[0][0] * lr + m[0][1] * lg + m[0][2] * lb + offset);
+ 			const unsigned int g = level(m[1][0] * lr + m[1][1] * lg + m[1][2] * lb + offset);
+@@ -680,7 +683,14 @@ void CamssIspIfe::computeStats(const MappedFrameBuffer &frame, const Applied &ap
+ 			stats.sum_.g() += g;
+ 			stats.sum_.b() += b;
+ 
+-			unsigned int luma = r * 77 + g * 150 + b * 29;
++			/*
++			 * A sample clipped in the output is at least full scale.
++			 * Undone, a white one lands at about 0.8 of the range
++			 * with the gains of daylight, and the exposure did not
++			 * see the clipped sky at all: count it in the top bin.
++			 */
++			unsigned int luma = std::max({ outR, outG, outB }) == 255 ?
++						    255 * 256 : r * 77 + g * 150 + b * 29;
+ 			stats.yHistogram[luma * SwIspStats::kYHistogramSize / (256 * 256)]++;
+ 		}
+ 	}
+-- 
+2.55.0
+

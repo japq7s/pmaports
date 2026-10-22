@@ -1,0 +1,268 @@
+From aeafdf82e674183f78519ea129674114e910e386 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Thu, 22 Oct 2026 13:44:04 +0200
+Subject: [PATCH 42/42] ipa: simple: agc: Aim at mid grey and keep the
+ highlights
+
+The exposure aimed at a mean sample value of 2.5 over five equal bins of
+the linear histogram, a mean of about 0.4 of the range. In most scenes
+the bulk of the samples stays in the first bin, below 0.2, until the
+highlights clip: the MSV hardly moved between 1000 and 3262 lines in a
+room with a window (1.98 to 2.29), the exposure went to its maximum and
+the overcast sky, 40 times brighter than the room, was white over a third
+of the frame. Raw frames showed 16-29% of the centre saturated.
+
+Aim at a mean of 0.18 of the range instead, mid grey, and use the
+samples clipped in the output, now in the top bin:
+
+- above 3% clipped, the exposure goes down by 20% per update or more,
+  without the mean dropping below a third of the target;
+- between 1% and 3% it is not increased;
+- an increase is limited to the one that takes the brightest 1% of the
+  samples to the clipping point of a grey sample with the current colour
+  gains, so that the exposure does not overshoot into the highlights and
+  come back.
+
+A mean within 15% of the target is good enough. Simulated on raw frames
+of that scene, with a 5-50% share of sky, the exposure settles in 3-8
+updates from 50 or 3262 lines without oscillating, at 628 lines for the
+original scene with 0% clipped (was 2488-3262 with 28%).
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/ipa/simple/algorithms/agc.cpp | 153 +++++++++++++++++++-----------
+ src/ipa/simple/algorithms/agc.h   |   3 +-
+ 2 files changed, 99 insertions(+), 57 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index 7fcae33..f1389f6 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -22,63 +22,95 @@ LOG_DEFINE_CATEGORY(IPASoftExposure)
+ namespace ipa::soft::algorithms {
+ 
+ /*
+- * The number of bins to use for the optimal exposure calculations.
++ * The histogram holds sensor values, linear in the exposure, with the samples
++ * clipped in the output in the top bin. The exposure aims at a mean of the
++ * histogram, above the black level, of mid grey: 0.18 of the range, 117 of
++ * 255 after the default gamma of 2.2.
++ *
++ * It used to aim at a mean sample value of 2.5 over five equal bins, a mean
++ * of about 0.4 of the range: in most scenes the bulk of the samples stays in
++ * the first bin (below 0.2) until the highlights clip, and looking out of a
++ * window the exposure went to its maximum with a third of the frame white.
+  */
+-static constexpr unsigned int kExposureBinsCount = 5;
++static constexpr float kTargetMean = 0.18;
+ 
+ /*
+- * The exposure is optimal when the mean sample value of the histogram is
+- * in the middle of the range.
++ * Highlights: with more than kClipHigh of the samples clipped, the exposure
++ * goes down by kClipStep per update or more, without dropping the mean below
++ * kMinMean, a third of the target: the sky through a window is about 40
++ * times brighter than the room, and keeping it all costs the room. Between
++ * kClipLow and kClipHigh the exposure is not increased, so that it settles
++ * instead of moving up and down across the limit.
+  */
+-static constexpr float kExposureOptimal = kExposureBinsCount / 2.0;
++static constexpr float kClipHigh = 0.03;
++static constexpr float kClipLow = 0.01;
++static constexpr float kClipStep = 0.8;
++static constexpr float kMinMean = kTargetMean / 3;
+ 
+ /*
+- * This implements the hysteresis for the exposure adjustment.
+- * It is small enough to have the exposure close to the optimal, and is big
+- * enough to prevent the exposure from wobbling around the optimal value.
++ * Hysteresis: a mean within this ratio of the target is good enough. It
++ * keeps the exposure from wobbling around the target.
+  */
+-static constexpr float kExposureSatisfactory = 0.2;
++static constexpr float kSatisfactory = 1.15;
+ 
+ /*
+- * The histogram holds sensor values, linear in the exposure. A value v of the
+- * range R falls in bin floor(5 v / R), so while little is clipped the MSV is
+- * about 5 mean / R + 0.5, and the exposure that reaches the target is
+- * (kExposureOptimal - 0.5) / (MSV - 0.5) times the current one.
+- *
+  * Steps proportional to the MSV error, of 4% at an error of 1, took tens of
+  * updates for a few times brighter or darker scene: with statistics on one
+- * frame in four, seconds. Move by that ratio instead, damped with an exponent
+- * against noise and clipping, and bounded per update. The update is relative
+- * to the exposure the statistics were taken with, so a correction that has
+- * not reached the sensor yet is not applied twice.
++ * frame in four, seconds. Move by the ratio of the target to the mean
++ * instead, damped with an exponent against noise and clipping, and bounded
++ * per update. The update is relative to the exposure the statistics were
++ * taken with, so a correction that has not reached the sensor yet is not
++ * applied twice.
+  */
+ static constexpr float kExpDamping = 0.8;
+ static constexpr float kExpMinFactor = 0.25;
+ static constexpr float kExpMaxFactor = 4.0;
+ 
++/*
++ * An increase is limited so that no more than kClipLow of the samples are
++ * expected to clip, with a margin of kClipMargin: otherwise, coming from the
++ * dark, the exposure went up past the clipping limit, down and up again.
++ */
++static constexpr double kClipMargin = 0.9;
++
+ Agc::Agc()
+ {
+ }
+ 
+-void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV)
++void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
++			 double mean, double clipped, double maxFactor)
+ {
+ 	int32_t &exposure = frameContext.sensor.exposure;
+ 	double &again = frameContext.sensor.gain;
+ 
+-	double error = kExposureOptimal - exposureMSV;
++	double target = kTargetMean;
++	if (clipped > kClipHigh)
++		target = std::min<double>(std::max<double>(mean * kClipStep, kMinMean),
++					  kTargetMean);
++	else if (clipped > kClipLow)
++		target = std::clamp<double>(mean, kMinMean, kTargetMean);
+ 
+-	if (std::abs(error) <= kExposureSatisfactory)
++	mean = std::max(mean, 1e-4);
++	float ratio = target / mean;
++
++	LOG(IPASoftExposure, Debug)
++		<< "mean " << mean << " clipped " << clipped
++		<< " target " << target << " max factor " << maxFactor;
++
++	if (ratio < kSatisfactory && ratio > 1 / kSatisfactory)
+ 		return;
+ 
+-	/*
+-	 * A positive error means too dark (increase), a negative one too
+-	 * bright (decrease). The MSV is at least 1.
+-	 */
+-	float ratio = (kExposureOptimal - 0.5f) /
+-		      std::max(static_cast<float>(exposureMSV) - 0.5f, 0.1f);
+ 	float factor = std::clamp(std::pow(ratio, kExpDamping),
+ 				  kExpMinFactor, kExpMaxFactor);
+ 
++	/* The highlights limit an increase, but not below kMinMean */
++	if (factor > 1.0f) {
++		factor = std::min<double>(factor,
++					  std::max(maxFactor, kMinMean / mean));
++		if (factor <= 1.0f)
++			return;
++	}
++
+ 	if (factor > 1.0f) {
+ 		/* Scene too dark: increase exposure first, then gain. */
+ 		if (exposure < context.configuration.agc.exposureMax) {
+@@ -114,8 +146,7 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 	context.activeState.agc.again = again;
+ 
+ 	LOG(IPASoftExposure, Debug)
+-		<< "exposureMSV " << exposureMSV
+-		<< " error " << error << " factor " << factor
++		<< "factor " << factor
+ 		<< " exp " << exposure << " again " << again;
+ }
+ 
+@@ -151,40 +182,50 @@ void Agc::process(IPAContext &context,
+ 	}
+ 
+ 	/*
+-	 * Calculate Mean Sample Value (MSV) according to formula from:
+-	 * https://www.araa.asn.au/acra/acra2007/papers/paper84final.pdf
++	 * Mean of the histogram above the black level, as a fraction of the
++	 * range, the top bin counting as full scale, and the fraction of the
++	 * samples in the top bin.
+ 	 */
+ 	const auto &histogram = stats->yHistogram;
+-	const unsigned int blackLevelHistIdx =
+-		context.activeState.blc.level / (256 / SwIspStats::kYHistogramSize);
+-	const unsigned int histogramSize =
+-		SwIspStats::kYHistogramSize - blackLevelHistIdx;
+-	const unsigned int yHistValsPerBin = histogramSize / kExposureBinsCount;
+-	const unsigned int yHistValsPerBinMod =
+-		histogramSize / (histogramSize % kExposureBinsCount + 1);
+-	int exposureBins[kExposureBinsCount] = {};
+-	unsigned int denom = 0;
+-	unsigned int num = 0;
+-
+-	if (yHistValsPerBin == 0) {
+-		LOG(IPASoftExposure, Debug)
+-			<< "Not adjusting exposure due to insufficient histogram data";
+-		return;
++	constexpr unsigned int kTop = SwIspStats::kYHistogramSize - 1;
++	constexpr double kBinWidth = 256.0 / SwIspStats::kYHistogramSize;
++	const double black = context.activeState.blc.level;
++	uint64_t total = 0;
++	double sum = 0.0;
++
++	for (unsigned int i = 0; i <= kTop; i++) {
++		double value = i == kTop ? 1.0 :
++			       ((i + 0.5) * kBinWidth - black) / (256.0 - black);
++		total += histogram[i];
++		sum += histogram[i] * std::clamp(value, 0.0, 1.0);
+ 	}
+ 
+-	for (unsigned int i = 0; i < histogramSize; i++) {
+-		unsigned int idx = (i - (i / yHistValsPerBinMod)) / yHistValsPerBin;
+-		exposureBins[idx] += histogram[blackLevelHistIdx + i];
+-	}
++	if (!total)
++		return;
+ 
+-	for (unsigned int i = 0; i < kExposureBinsCount; i++) {
+-		LOG(IPASoftExposure, Debug) << i << ": " << exposureBins[i];
+-		denom += exposureBins[i];
+-		num += exposureBins[i] * (i + 1);
++	/*
++	 * A grey sample clips in the output at the luminance of full scale
++	 * divided by the colour gains: about 0.8 of the range in daylight.
++	 * The largest increase is the one that takes the brightest kClipLow
++	 * of the samples, starting at the lower edge of their bin, there.
++	 */
++	const RGB<float> &gains = context.activeState.awb.gains;
++	const double knee = (0.299 / gains.r() + 0.587 / gains.g() +
++			     0.114 / gains.b()) * kClipMargin;
++	double maxFactor = kExpMaxFactor;
++	uint64_t above = histogram[kTop];
++	for (unsigned int i = kTop; i-- > 0;) {
++		above += histogram[i];
++		if (above <= kClipLow * total)
++			continue;
++		double low = (i * kBinWidth - black) / (256.0 - black);
++		if (low > 0.0)
++			maxFactor = knee / low;
++		break;
+ 	}
+ 
+-	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
+-	updateExposure(context, frameContext, exposureMSV);
++	updateExposure(context, frameContext, sum / total,
++		       static_cast<double>(histogram[kTop]) / total, maxFactor);
+ }
+ 
+ REGISTER_IPA_ALGORITHM(Agc, "Agc")
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index 112d9f5..4c23d93 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -25,7 +25,8 @@ public:
+ 		     ControlList &metadata) override;
+ 
+ private:
+-	void updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV);
++	void updateExposure(IPAContext &context, IPAFrameContext &frameContext,
++			    double mean, double clipped, double maxFactor);
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+-- 
+2.55.0
+
