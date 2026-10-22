@@ -3,7 +3,7 @@ maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
 pkgver=9999$_pkgver
-pkgrel=24
+pkgrel=25
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -100,6 +100,7 @@ source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_pkgver/libc
 	0040-ipa-simple-af-Start-the-first-scan-in-a-noisy-scene-.patch
 	0041-pipeline-camss-Count-samples-clipped-in-the-output-i.patch
 	0042-ipa-simple-agc-Aim-at-mid-grey-and-keep-the-highligh.patch
+	0043-ipa-simple-agc-Do-not-cycle-around-the-clipping-limi.patch
 	qcam.desktop
 	$_tuning_files
 	"
@@ -256,6 +257,7 @@ d10e75da0331c70a7c3231db96cfe3832686b1b618ef59d655be8f2660a18be6855a820388d4df48
 a4ec7c2717fb05a09703f43992d95cc2f68f51edbbcddb745118fdd2d9a9352914249053cb3a92e2c11c364f2280172eb6ae55755d272e877966d437981b2285  0040-ipa-simple-af-Start-the-first-scan-in-a-noisy-scene-.patch
 ef612ab97c0ac761578231fbb7192503ae1a960c84660b42ac3a231e714192907e1ffd6498a8b6fad3058fb0195c48c7dfef866b9927e4d3851c767c990b3b81  0041-pipeline-camss-Count-samples-clipped-in-the-output-i.patch
 48b70ec0b56cba97e4917befa52c81a94acf1af65d6f03cd48d3a92302c2635c64df9b71d80f973a1d1402ef49c02ec8872210bf5e7ac4d374008cfef6b4cb0b  0042-ipa-simple-agc-Aim-at-mid-grey-and-keep-the-highligh.patch
+3920a6a948c6d8c43fed9c2c5570d3dcb19054cacf353f11439699be088128ba0bfa1af214bbd661652c62fd010c3d3d796bb2194c2dc5131359b75508aca98c  0043-ipa-simple-agc-Do-not-cycle-around-the-clipping-limi.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml

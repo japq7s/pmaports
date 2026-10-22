@@ -1,0 +1,80 @@
+From e820804b611d0d28112a7168b5095b2dcea741ad Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Thu, 22 Oct 2026 14:45:22 +0200
+Subject: [PATCH 43/43] ipa: simple: agc: Do not cycle around the clipping
+ limits
+
+With a lamp in the frame, 1-3% of the samples clipped and the share
+jittered by +-0.4% at a constant exposure. Below 1% the exposure went up
+by 20%, above 3% down by 16%, and the image stepped between a gain of
+6.7 and 8 every few seconds.
+
+Only increase the exposure with at most 0.5% clipped, decrease it with
+more than 4%, and skip increases below 5%. Above 0.5% clipped an increase
+only goes up to the floor of the mean, now half the target. In a
+simulation on raw frames with that jitter, 2-50% of sky through a window
+settles without moving again in all but one case (15% sky with the
+clipping point overestimated by 20%).
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/ipa/simple/algorithms/agc.cpp | 26 +++++++++++++++-----------
+ 1 file changed, 15 insertions(+), 11 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index f1389f6..39c62c9 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -37,15 +37,20 @@ static constexpr float kTargetMean = 0.18;
+ /*
+  * Highlights: with more than kClipHigh of the samples clipped, the exposure
+  * goes down by kClipStep per update or more, without dropping the mean below
+- * kMinMean, a third of the target: the sky through a window is about 40
+- * times brighter than the room, and keeping it all costs the room. Between
+- * kClipLow and kClipHigh the exposure is not increased, so that it settles
+- * instead of moving up and down across the limit.
++ * kMinMean, half the target: the sky through a window is about 40 times
++ * brighter than the room, and keeping it all costs the room. Above kClipLow
++ * the exposure is only increased up to kMinMean, so that it settles instead
++ * of moving up and down across the limit. The clipped share of a lamp in the
++ * frame jitters by +-0.4% at a constant exposure: limits of 1% and 3% let the
++ * gain cycle between 6.7 and 8 every few seconds.
+  */
+-static constexpr float kClipHigh = 0.03;
+-static constexpr float kClipLow = 0.01;
++static constexpr float kClipHigh = 0.04;
++static constexpr float kClipLow = 0.005;
+ static constexpr float kClipStep = 0.8;
+-static constexpr float kMinMean = kTargetMean / 3;
++static constexpr float kMinMean = kTargetMean / 2;
++
++/* Smaller increases are not worth a visible step */
++static constexpr float kMinStep = 1.05;
+ 
+ /*
+  * Hysteresis: a mean within this ratio of the target is good enough. It
+@@ -87,8 +92,6 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 	if (clipped > kClipHigh)
+ 		target = std::min<double>(std::max<double>(mean * kClipStep, kMinMean),
+ 					  kTargetMean);
+-	else if (clipped > kClipLow)
+-		target = std::clamp<double>(mean, kMinMean, kTargetMean);
+ 
+ 	mean = std::max(mean, 1e-4);
+ 	float ratio = target / mean;
+@@ -105,9 +108,10 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext,
+ 
+ 	/* The highlights limit an increase, but not below kMinMean */
+ 	if (factor > 1.0f) {
++		double allowed = clipped <= kClipLow ? maxFactor : 1.0;
+ 		factor = std::min<double>(factor,
+-					  std::max(maxFactor, kMinMean / mean));
+-		if (factor <= 1.0f)
++					  std::max(allowed, kMinMean / mean));
++		if (factor < kMinStep)
+ 			return;
+ 	}
+ 
+-- 
+2.55.0
+
