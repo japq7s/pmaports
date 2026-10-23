@@ -1,0 +1,197 @@
+From 89e3f068329619dbad1bbf6a33d46bc8e39c60e8 Mon Sep 17 00:00:00 2001
+From: japq7s <japiotr123@proton.me>
+Date: Fri, 23 Oct 2026 22:34:54 +0200
+Subject: [PATCH] shared-qmi: register LOC events with a client type before
+ starting
+
+The LOC service of the SM8450 modem (realme GT Neo5) rejects Register
+Events without the Client Type TLV with InvalidArgument, and a Start
+from a client that has not registered yet with GeneralError, so GPS
+could not be enabled at all. A Register Events with the AFW client type
+followed by Start gives NMEA traces and inject time requests; the NFW
+type is rejected like a missing one.
+
+Register the events, with the AFW client type, before starting the
+session, and set the client type in the inject request registration
+too.
+
+Signed-off-by: japq7s <japiotr123@proton.me>
+---
+ src/mm-shared-qmi.c | 113 +++++++++++++++++++++++---------------------
+ 1 file changed, 60 insertions(+), 53 deletions(-)
+
+diff --git a/src/mm-shared-qmi.c b/src/mm-shared-qmi.c
+index f578d87..ce91f21 100644
+--- a/src/mm-shared-qmi.c
++++ b/src/mm-shared-qmi.c
+@@ -5653,32 +5653,32 @@ pds_gps_service_state_start_ready (QmiClientPds *client,
+ }
+ 
+ static void
+-loc_register_events_ready (QmiClientLoc *client,
+-                           GAsyncResult *res,
+-                           GTask        *task)
++loc_start_ready (QmiClientLoc *client,
++                 GAsyncResult *res,
++                 GTask        *task)
+ {
+-    MMSharedQmi                       *self;
+-    Private                           *priv;
+-    QmiMessageLocRegisterEventsOutput *output;
+-    GError                            *error = NULL;
++    MMSharedQmi              *self;
++    Private                  *priv;
++    QmiMessageLocStartOutput *output;
++    GError                   *error = NULL;
+ 
+-   output = qmi_client_loc_register_events_finish (client, res, &error);
+-   if (!output) {
++    output = qmi_client_loc_start_finish (client, res, &error);
++    if (!output) {
+         g_prefix_error (&error, "QMI operation failed: ");
+         g_task_return_error (task, error);
+         g_object_unref (task);
+         return;
+-   }
++    }
+ 
+-    if (!qmi_message_loc_register_events_output_get_result (output, &error)) {
+-        g_prefix_error (&error, "Couldn't not register tracking events: ");
++    if (!qmi_message_loc_start_output_get_result (output, &error)) {
++        g_prefix_error (&error, "Couldn't start GPS engine: ");
+         g_task_return_error (task, error);
+         g_object_unref (task);
+-        qmi_message_loc_register_events_output_unref (output);
++        qmi_message_loc_start_output_unref (output);
+         return;
+     }
+ 
+-    qmi_message_loc_register_events_output_unref (output);
++    qmi_message_loc_start_output_unref (output);
+ 
+     self = g_task_get_source_object (task);
+     priv = get_private (self);
+@@ -5697,16 +5697,15 @@ loc_register_events_ready (QmiClientLoc *client,
+ }
+ 
+ static void
+-loc_start_ready (QmiClientLoc *client,
+-                 GAsyncResult *res,
+-                 GTask        *task)
++loc_register_events_ready (QmiClientLoc *client,
++                           GAsyncResult *res,
++                           GTask        *task)
+ {
+-    QmiMessageLocRegisterEventsInput *input;
+-    QmiMessageLocStartOutput         *output;
+-    guint64                           event_mask;
+-    GError                           *error = NULL;
++    QmiMessageLocRegisterEventsOutput *output;
++    QmiMessageLocStartInput           *input;
++    GError                            *error = NULL;
+ 
+-    output = qmi_client_loc_start_finish (client, res, &error);
++    output = qmi_client_loc_register_events_finish (client, res, &error);
+     if (!output) {
+         g_prefix_error (&error, "QMI operation failed: ");
+         g_task_return_error (task, error);
+@@ -5714,29 +5713,28 @@ loc_start_ready (QmiClientLoc *client,
+         return;
+     }
+ 
+-    if (!qmi_message_loc_start_output_get_result (output, &error)) {
+-        g_prefix_error (&error, "Couldn't start GPS engine: ");
++    if (!qmi_message_loc_register_events_output_get_result (output, &error)) {
++        g_prefix_error (&error, "Couldn't not register tracking events: ");
+         g_task_return_error (task, error);
+         g_object_unref (task);
+-        qmi_message_loc_start_output_unref (output);
++        qmi_message_loc_register_events_output_unref (output);
+         return;
+     }
+ 
+-    qmi_message_loc_start_output_unref (output);
++    qmi_message_loc_register_events_output_unref (output);
+ 
+-    input = qmi_message_loc_register_events_input_new ();
+-    event_mask = QMI_LOC_EVENT_REGISTRATION_FLAG_NMEA |
+-                 QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_TIME_REQUEST |
+-                 QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_POSITION_REQUEST;
+-    qmi_message_loc_register_events_input_set_event_registration_mask (
+-        input, event_mask, NULL);
+-    qmi_client_loc_register_events (client,
+-                                    input,
+-                                    10,
+-                                    NULL,
+-                                    (GAsyncReadyCallback) loc_register_events_ready,
+-                                    task);
+-    qmi_message_loc_register_events_input_unref (input);
++    input = qmi_message_loc_start_input_new ();
++    qmi_message_loc_start_input_set_session_id (input, DEFAULT_LOC_SESSION_ID, NULL);
++    qmi_message_loc_start_input_set_intermediate_report_state (input, QMI_LOC_INTERMEDIATE_REPORT_STATE_DISABLE, NULL);
++    qmi_message_loc_start_input_set_minimum_interval_between_position_reports (input, 1000, NULL);
++    qmi_message_loc_start_input_set_fix_recurrence_type (input, QMI_LOC_FIX_RECURRENCE_TYPE_REQUEST_PERIODIC_FIXES, NULL);
++    qmi_client_loc_start (client,
++                          input,
++                          10,
++                          NULL,
++                          (GAsyncReadyCallback) loc_start_ready,
++                          task);
++    qmi_message_loc_start_input_unref (input);
+ }
+ 
+ 
+@@ -5777,20 +5775,28 @@ start_gps_engine (MMSharedQmi         *self,
+                                         MM_PORT_QMI_FLAG_DEFAULT,
+                                         NULL);
+     if (client) {
+-        QmiMessageLocStartInput *input;
+-
+-        input = qmi_message_loc_start_input_new ();
+-        qmi_message_loc_start_input_set_session_id (input, DEFAULT_LOC_SESSION_ID, NULL);
+-        qmi_message_loc_start_input_set_intermediate_report_state (input, QMI_LOC_INTERMEDIATE_REPORT_STATE_DISABLE, NULL);
+-        qmi_message_loc_start_input_set_minimum_interval_between_position_reports (input, 1000, NULL);
+-        qmi_message_loc_start_input_set_fix_recurrence_type (input, QMI_LOC_FIX_RECURRENCE_TYPE_REQUEST_PERIODIC_FIXES, NULL);
+-        qmi_client_loc_start (QMI_CLIENT_LOC (client),
+-                              input,
+-                              10,
+-                              NULL,
+-                              (GAsyncReadyCallback) loc_start_ready,
+-                              task);
+-        qmi_message_loc_start_input_unref (input);
++        QmiMessageLocRegisterEventsInput *input;
++
++        /*
++         * Register before starting: newer engines (e.g. SM8450) reject a
++         * Start from a client that has not registered (GeneralError), and
++         * a registration without a client type (InvalidArgument).
++         */
++        input = qmi_message_loc_register_events_input_new ();
++        qmi_message_loc_register_events_input_set_event_registration_mask (
++            input,
++            QMI_LOC_EVENT_REGISTRATION_FLAG_NMEA |
++            QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_TIME_REQUEST |
++            QMI_LOC_EVENT_REGISTRATION_FLAG_INJECT_POSITION_REQUEST,
++            NULL);
++        qmi_message_loc_register_events_input_set_client_type (input, QMI_LOC_CLIENT_TYPE_AFW, NULL);
++        qmi_client_loc_register_events (QMI_CLIENT_LOC (client),
++                                        input,
++                                        10,
++                                        NULL,
++                                        (GAsyncReadyCallback) loc_register_events_ready,
++                                        task);
++        qmi_message_loc_register_events_input_unref (input);
+         return;
+     }
+ 
+@@ -7157,6 +7163,7 @@ out:
+         input = qmi_message_loc_register_events_input_new ();
+         qmi_message_loc_register_events_input_set_event_registration_mask (
+             input, event_mask, NULL);
++        qmi_message_loc_register_events_input_set_client_type (input, QMI_LOC_CLIENT_TYPE_AFW, NULL);
+         qmi_client_loc_register_events (client,
+                                         input,
+                                         10,
+-- 
+2.55.0
+
