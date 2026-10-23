@@ -30,7 +30,7 @@ makedepends="
 	polkit-dev
 	vala
 	"
-checkdepends="glib-dev py3-gobject3 py3-dbus"
+checkdepends="dbus glib-dev py3-gobject3 py3-dbus"
 subpackages="
 	$pkgname-lang
 	$pkgname-doc
