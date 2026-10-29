@@ -3,7 +3,7 @@
 pkgname=device-realme-senna-b
 pkgdesc="Realme GT Neo5 150W"
 pkgver=0.1
-pkgrel=41
+pkgrel=42
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -53,7 +53,6 @@ source="
 	deviceinfo
 	kernel-cmdline.conf
 	modules-initfs
-	90-senna-gpu-nopm.rules
 	90-senna-wlan-l1ss.rules
 	senna-wlan-l1ss
 	msm-modem-uim-selection-retry.conf
@@ -104,6 +103,7 @@ source="
 	megapixels-Wide.dcp
 	megapixels-postprocess.sh
 	72-senna-flash.rules
+	90-senna-sched.conf
 "
 
 build() {
@@ -161,8 +161,8 @@ package() {
 	echo 530 > "$_hfs"/socinfo/soc_id
 	echo 1.0 > "$_hfs"/socinfo/revision
 
-	install -Dm644 "$srcdir"/90-senna-gpu-nopm.rules \
-		"$pkgdir"/usr/lib/udev/rules.d/90-senna-gpu-nopm.rules
+	install -Dm644 "$srcdir"/90-senna-sched.conf \
+		"$pkgdir"/usr/lib/sysctl.d/90-senna-sched.conf
 	install -Dm644 "$srcdir"/90-senna-wlan-l1ss.rules \
 		"$pkgdir"/usr/lib/udev/rules.d/90-senna-wlan-l1ss.rules
 	install -Dm755 "$srcdir"/senna-wlan-l1ss \
@@ -272,7 +272,6 @@ sha512sums="
 0f66ceaef68534f6fff603de8c60f5f03d168649142aa21d821a23bd162f81ece523e31004e7102ea97c6c241756a2f9567de46d8b81c984cf23610908ea2bf7  deviceinfo
 bd2144c807af4ae5e87b4de9b4e71d37da8f86ebf84cd40df7e226e3a9366477934acc9b4fa0944a8d68728b3f8df710f69eb9538201dd12ec7bf750f3d0af91  kernel-cmdline.conf
 ebe83921bd566370cc548b2b2b3b158e56e2d1b25cabd793a0ddecb91e703150610599dc249968a17b427337f8b0609adcf46b778df0bfc77ce2eb43cad828e9  modules-initfs
-cc561eb2ff8e5c94e5bc3ef456403ad7aee9a25d1973cdc1bcc6b132129c6c7c7b5c2cc22da75812def7becef72d23366424449ff757b89ff5bc82167f353148  90-senna-gpu-nopm.rules
 b8fcf239570ae1f68f4abbce19314644ec8009a1d02c8e10e8b6fbc7104de86dc2b9a3d97016ad6df385d14ce51b9de671598bb3aff01d6534158b1bca3017a0  90-senna-wlan-l1ss.rules
 90bd364f49f59bab4f387067a5b52e19b53846c0201555f4478020888625f95284f0a3cea4de600cf55cf23c46b4fd54f53d6cad035e865d30a89b14e4130258  senna-wlan-l1ss
 0b34d277cea761fc2bdb6aabde25f4b99fdee51ee43767ae98c672e8702931e103b0d35a0ff09b72f85c9be5c95e96ffd709a47e91b019e8743f656cd9ef9898  msm-modem-uim-selection-retry.conf
@@ -309,6 +308,9 @@ d5aba97ea4608d8a2a238dd79c844569cc49e17ee018f77990cbac299a5518e2f231cdfc8a6a13fb
 2e18c7088a6ab61720823fdf82bf040f42009763583e4c3e1fa4d9d28bb7b97ec70f70e9e3a7e3f228d5e0e89233c61be88aa268af87e02330fecbfb71bf34ac  audio-usecaseKvManager.xml
 1c89d7fdfff83dc0fc340118a8f6fe32d9afcd0654da9d9c6521d68ad086c5bd56a1b626666cce061c791c80b37a983c89cc93ee3ec25a055ab2edfa90d69c30  oplus-chg-blacklist.conf
 7c7f3d33a3e615bea9530c68289212c141451ab7006c4ccdec7f349e8dfab38f21396e7ad8b6adbc3733e9b35e4639dc85745c7d2ec94dee5d5b9533b9b83d81  oplus-chg-modules-load.conf
+9224531e465f0ad7ff041bd64991bcb32690768cb931aef5abc4bfc5035f1b83c61808a3ea09914f0002e556b935ca3c0942571d930ec4bc9f96907e68455de0  senna-charge-inhibit
+fdbb0fe600676e8b668312e8c6b17afc0a8047b27ac2ad3009a7b382bc6b207980c19e6fb0992a519603b0eeaa491a284e5ec7aac8f56d11222c78e66102052e  senna-charge-inhibit.service
+2f8e284c9d3d354a10544c06bb2aba3cf8bfabf173589581a1fc52d13734f6354b07633aaede0959105e42c851f0df04087678ad4fecd2d1f7549b091a67d65e  senna-charge-inhibit.initd
 18fa7b230af1ffeb2134a4a2ea0dda5d4042020395a92691a4f2a58632f53d183b87404bc965e3fc6d2e634c8aa2e12317e996f7b8e89ae330f22a583ac4d791  wake-alarm.conf
 a719187894378c61f47763aae75a3b1e94b403bb1c6f91608c9056838dc7ee3b829c68301862db6c795eb068d489c44a5a164a6331888549f78e9054f34120ec  72-senna-haptics.rules
 1a039c2e7414646568c187d25cc441ec118f0281b6840c6aee88fcc9ced427f1852d641286fd0e2ed35a82e1abab7ccce6f968d4a56192fab678540b7b70c320  senna-touch-blacklist.conf
@@ -320,7 +322,5 @@ a58e7e08c1b88c300e3142acbc59bf7dd835d3140c1631ee265459bd952f4eb305551a2ded9fb5fa
 aa4a01d76e1e0c3b415766c129bab43a910039c60755ebd3eb2a1c1706545ebc706cb146d966d12394ee9b2481a2506e9bbe5d9f2d691f71fab1efcf78454307  megapixels-Wide.dcp
 93185321705b609a3f270397aa999cf05b3c4a3f2266ccd783a8c4a53dab790ad79ffe6ea8902e72ea23245a0dbd42d79d17b7df0a906035e4f6f05582c673d7  megapixels-postprocess.sh
 48eb07b04d5140b37a72e72081448806fd9031524c9bfe125656ea8bac8a240db682d9a5adce1f0e95d57625a83c0e4617d2123b7ebb47476a9eadd489629964  72-senna-flash.rules
-9224531e465f0ad7ff041bd64991bcb32690768cb931aef5abc4bfc5035f1b83c61808a3ea09914f0002e556b935ca3c0942571d930ec4bc9f96907e68455de0  senna-charge-inhibit
-fdbb0fe600676e8b668312e8c6b17afc0a8047b27ac2ad3009a7b382bc6b207980c19e6fb0992a519603b0eeaa491a284e5ec7aac8f56d11222c78e66102052e  senna-charge-inhibit.service
-2f8e284c9d3d354a10544c06bb2aba3cf8bfabf173589581a1fc52d13734f6354b07633aaede0959105e42c851f0df04087678ad4fecd2d1f7549b091a67d65e  senna-charge-inhibit.initd
+87fa3e914a70b170a10403ff901fdfa6a098d35bd60534efc87cec1e127c40e8e964da7e6b23e3b13f094847278665cbedc9c2b7f2b89014b3dc984b5ac83f2c  90-senna-sched.conf
 "
